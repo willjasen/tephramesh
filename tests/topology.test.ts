@@ -5,6 +5,7 @@ import {
   createMeshPlan,
   meshPeerPolicy,
   meshRuntimeState,
+  meshRuntimeStates,
 } from "../src/topology";
 
 const endpoint = { protocol: "https" as const, hostname: "example.com", port: 8384 };
@@ -158,5 +159,53 @@ describe("active mesh instances", () => {
       setupState: "pending",
     };
     expect(activeMeshInstances([...instances, pending])).toEqual(instances);
+  });
+
+  it("shows active work and pending setup as separate states", () => {
+    const pending: MeshInstance = {
+      ...instances[1]!,
+      id: "pending-phone",
+      deviceId: "PENDING-PHONE-ID",
+      setupState: "pending",
+    };
+    const statuses = new Map([
+      [instances[0]!.id, {
+        checkedAt: 1,
+        ok: true,
+        folder: {
+          state: "syncing",
+          localFiles: 1,
+          globalFiles: 2,
+          needFiles: 1,
+          needBytes: 1,
+        },
+      }],
+      [instances[1]!.id, {
+        checkedAt: 1,
+        ok: true,
+        folder: {
+          state: "idle",
+          localFiles: 2,
+          globalFiles: 2,
+          needFiles: 0,
+          needBytes: 0,
+        },
+      }],
+      [instances[2]!.id, {
+        checkedAt: 1,
+        ok: true,
+        folder: {
+          state: "idle",
+          localFiles: 2,
+          globalFiles: 2,
+          needFiles: 0,
+          needBytes: 0,
+        },
+      }],
+    ]);
+    expect(meshRuntimeStates([...instances, pending], statuses)).toEqual([
+      "syncing",
+      "pending",
+    ]);
   });
 });

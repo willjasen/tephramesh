@@ -143,11 +143,17 @@ button.tephramesh-pending-button {
   margin-top: var(--size-4-1);
 }
 
+.tephramesh-topology-runtime-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  margin-left: auto;
+}
+
 .tephramesh-topology-runtime {
   background: var(--background-primary);
   border-radius: var(--radius-s);
   color: var(--text-muted);
-  margin-left: auto;
   padding: var(--size-4-1) var(--size-4-2);
   text-transform: lowercase;
 }
@@ -163,6 +169,10 @@ button.tephramesh-pending-button {
 
 .tephramesh-topology-runtime.is-unavailable {
   color: var(--text-error);
+}
+
+.tephramesh-topology-runtime.is-pending {
+  color: var(--text-warning);
 }
 
 .tephramesh-topology-metrics {

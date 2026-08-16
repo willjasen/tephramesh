@@ -10,7 +10,7 @@ import {
   shortDeviceId,
   validateShardPassword,
 } from "./security";
-import { createMeshPlan, meshRuntimeState } from "./topology";
+import { activeMeshInstances, createMeshPlan, meshRuntimeStates } from "./topology";
 import { InstanceModal } from "./instance-modal";
 import { showTephrameshNotice } from "./notices";
 import { RemoveInstanceModal } from "./remove-instance-modal";
@@ -436,14 +436,17 @@ export class TephrameshSettingTab extends PluginSettingTab {
     this.topologyElement.empty();
     this.topologyElement.removeClass("is-valid", "is-incomplete");
     try {
-      const plan = createMeshPlan(
+      createMeshPlan(
         this.plugin.settings.instances,
         this.plugin.settings.folderId,
         this.plugin.settings.folderLabel,
         this.plugin.getShardEncryptionKey() ?? "",
       );
-      const devices = this.plugin.settings.instances.filter((item) => item.kind === "device").length;
-      const shards = this.plugin.settings.instances.length - devices;
+      const activeInstances = activeMeshInstances(this.plugin.settings.instances);
+      const devices = activeInstances.filter((item) => item.kind === "device").length;
+      const shards = activeInstances.length - devices;
+      const activeCount = activeInstances.length;
+      const activeConnections = (activeCount * (activeCount - 1)) / 2;
       const reportedGlobalFiles = this.plugin.settings.instances.flatMap(
         (instance) => {
           const count = this.plugin.runtimeStatuses.get(instance.id)?.folder?.globalFiles;
@@ -464,15 +467,18 @@ export class TephrameshSettingTab extends PluginSettingTab {
         cls: "tephramesh-topology-subtitle",
         text: "The full mesh can be configured with the current settings.",
       });
-      const runtimeState = meshRuntimeState(
-        this.plugin.settings.instances.map((instance) =>
-          this.plugin.runtimeStatuses.get(instance.id),
-        ),
-      );
-      status.createSpan({
-        cls: `tephramesh-topology-runtime is-${runtimeState}`,
-        text: runtimeState,
+      const runtimeGroup = status.createDiv({
+        cls: "tephramesh-topology-runtime-group",
       });
+      for (const runtimeState of meshRuntimeStates(
+        this.plugin.settings.instances,
+        this.plugin.runtimeStatuses,
+      )) {
+        runtimeGroup.createSpan({
+          cls: `tephramesh-topology-runtime is-${runtimeState}`,
+          text: runtimeState,
+        });
+      }
 
       const metrics = this.topologyElement.createDiv({
         cls: "tephramesh-topology-metrics",
@@ -480,7 +486,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       for (const [label, value] of [
         [devices === 1 ? "Device" : "Devices", devices],
         [shards === 1 ? "Shard" : "Shards", shards],
-        [plan.edgeCount === 1 ? "Connection" : "Connections", plan.edgeCount],
+        [activeConnections === 1 ? "Connection" : "Connections", activeConnections],
         ["Global files", globalFiles ?? "—"],
       ] as const) {
         const metric = metrics.createDiv({ cls: "tephramesh-topology-metric" });

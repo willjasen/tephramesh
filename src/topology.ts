@@ -6,10 +6,22 @@ import type {
   SyncthingFolderDevice,
 } from "./model";
 
-export type MeshRuntimeState = "idle" | "scanning" | "syncing" | "checking" | "unavailable";
+export type MeshRuntimeState = "idle" | "scanning" | "syncing" | "checking" | "unavailable" | "pending";
 
 export function activeMeshInstances(instances: MeshInstance[]): MeshInstance[] {
   return instances.filter((instance) => instance.setupState !== "pending");
+}
+
+export function meshRuntimeStates(
+  instances: MeshInstance[],
+  statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
+): MeshRuntimeState[] {
+  const activeState = meshRuntimeState(
+    activeMeshInstances(instances).map((instance) => statuses.get(instance.id)),
+  );
+  return instances.some((instance) => instance.setupState === "pending")
+    ? [activeState, "pending"]
+    : [activeState];
 }
 
 export function meshRuntimeState(
