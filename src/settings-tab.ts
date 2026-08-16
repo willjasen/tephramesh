@@ -10,7 +10,12 @@ import {
   shortDeviceId,
   validateShardPassword,
 } from "./security";
-import { activeMeshInstances, createMeshPlan, meshRuntimeStates } from "./topology";
+import {
+  activeMeshInstances,
+  createMeshPlan,
+  isSyncthingSyncState,
+  meshRuntimeStates,
+} from "./topology";
 import { InstanceModal } from "./instance-modal";
 import { showTephrameshNotice } from "./notices";
 import { RemoveInstanceModal } from "./remove-instance-modal";
@@ -559,8 +564,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
       );
       return;
     }
-    if (folder.state === "syncing") {
+    if (isSyncthingSyncState(folder.state)) {
       element.addClass("is-syncing");
+    }
+    if (folder.state === "syncing") {
       const progress = syncProgress(folder);
       element.setText(
         `syncing · ${progress === undefined ? "calculating…" : `${progress}%`} · ↓ ${formatTransferRate(status.downloadBytesPerSecond)} · ↑ ${formatTransferRate(status.uploadBytesPerSecond)} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,

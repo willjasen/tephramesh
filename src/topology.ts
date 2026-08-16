@@ -12,6 +12,10 @@ export function activeMeshInstances(instances: MeshInstance[]): MeshInstance[] {
   return instances.filter((instance) => instance.setupState !== "pending");
 }
 
+export function isSyncthingSyncState(state: string | undefined): boolean {
+  return state === "syncing" || state === "sync-preparing";
+}
+
 export function meshRuntimeStates(
   instances: MeshInstance[],
   statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
@@ -34,7 +38,7 @@ export function meshRuntimeState(
   if (statuses.some((status) => status?.folder?.state === "scanning")) {
     return "scanning";
   }
-  if (statuses.some((status) => status?.folder?.state === "syncing")) {
+  if (statuses.some((status) => isSyncthingSyncState(status?.folder?.state))) {
     return "syncing";
   }
   if (statuses.every((status) => status?.folder?.state === "idle")) return "idle";

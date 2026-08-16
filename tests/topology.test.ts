@@ -3,6 +3,7 @@ import type { MeshInstance } from "../src/model";
 import {
   activeMeshInstances,
   createMeshPlan,
+  isSyncthingSyncState,
   meshPeerPolicy,
   meshRuntimeState,
   meshRuntimeStates,
@@ -138,6 +139,11 @@ describe("mesh runtime state", () => {
 
   it("shows syncing when any instance is syncing", () => {
     expect(meshRuntimeState([status("idle"), status("syncing")])).toBe("syncing");
+  });
+
+  it("treats sync preparation as active syncing", () => {
+    expect(isSyncthingSyncState("sync-preparing")).toBe(true);
+    expect(meshRuntimeState([status("idle"), status("sync-preparing")])).toBe("syncing");
   });
 
   it("only shows idle when every instance is idle", () => {
