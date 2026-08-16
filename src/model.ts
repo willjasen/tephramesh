@@ -15,6 +15,7 @@ export interface MeshInstance {
   endpoint: Endpoint;
   deviceId: string;
   folderPath: string;
+  setupState?: "pending";
 }
 
 export interface TephrameshSettings {

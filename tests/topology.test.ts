@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { MeshInstance } from "../src/model";
-import { createMeshPlan, meshPeerPolicy, meshRuntimeState } from "../src/topology";
+import {
+  activeMeshInstances,
+  createMeshPlan,
+  meshPeerPolicy,
+  meshRuntimeState,
+} from "../src/topology";
 
 const endpoint = { protocol: "https" as const, hostname: "example.com", port: 8384 };
 const password = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
@@ -141,5 +146,17 @@ describe("mesh runtime state", () => {
   it("reports unavailable and incomplete samples safely", () => {
     expect(meshRuntimeState([{ checkedAt: 1, ok: false }])).toBe("unavailable");
     expect(meshRuntimeState([undefined])).toBe("checking");
+  });
+});
+
+describe("active mesh instances", () => {
+  it("excludes pending instances from active safety and reconciliation work", () => {
+    const pending: MeshInstance = {
+      ...instances[1]!,
+      id: "pending-phone",
+      deviceId: "PENDING-PHONE-ID",
+      setupState: "pending",
+    };
+    expect(activeMeshInstances([...instances, pending])).toEqual(instances);
   });
 });

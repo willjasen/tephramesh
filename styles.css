@@ -88,6 +88,11 @@
   color: var(--text-error);
 }
 
+.tephramesh-status.is-pending,
+button.tephramesh-pending-button {
+  color: var(--text-warning);
+}
+
 .tephramesh-status.is-scanning,
 .tephramesh-status.is-syncing {
   color: var(--color-blue, #59c2ff);

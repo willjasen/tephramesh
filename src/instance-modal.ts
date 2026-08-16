@@ -79,6 +79,11 @@ export class InstanceModal extends Modal {
       result: InstanceDiscovery,
       apiKey: string,
     ) => Promise<void>,
+    private readonly onPending?: (
+      result: InstanceDiscovery,
+      apiKey: string,
+      reason: string,
+    ) => Promise<void>,
   ) {
     super(app);
     this.draft = {
@@ -305,8 +310,9 @@ export class InstanceModal extends Modal {
       return;
     }
     this.setBusy("add");
+    let inspected: InspectionResult | undefined;
     try {
-      const inspected = await this.inspect(false);
+      inspected = await this.inspect(false);
       await this.beforeAdd(inspected.discovery);
       const result = await this.inspect(true);
       await this.onDiscovered(result.discovery, this.draft.apiKey);
@@ -319,7 +325,24 @@ export class InstanceModal extends Modal {
       );
       this.close();
     } catch (error) {
-      if (error instanceof MeshNotReadyError) {
+      if (error instanceof MeshNotReadyError && inspected && this.onPending) {
+        try {
+          await this.onPending(
+            inspected.discovery,
+            this.draft.apiKey,
+            error.message,
+          );
+          showTephrameshNotice(
+            "warning",
+            "Instance saved as pending",
+            `${error.message} Use Pending setup from the Instances tab when the mesh is ready.`,
+          );
+          this.close();
+          return;
+        } catch (pendingError) {
+          this.showError(pendingError);
+        }
+      } else if (error instanceof MeshNotReadyError) {
         showTephrameshNotice("warning", "Mesh not ready", error.message);
         this.invalidateTest();
       } else {

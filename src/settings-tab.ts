@@ -19,6 +19,7 @@ import { generatePostQuantumAgeKeyPair } from "./secret-bundle";
 import { syncProgress } from "./syncthing-progress";
 import { formatTransferRate } from "./syncthing-traffic";
 import { EditEndpointModal } from "./edit-endpoint-modal";
+import { MeshNotReadyError } from "./mesh-errors";
 
 type SettingsSection = "instances" | "vault" | "topology";
 
@@ -291,8 +292,36 @@ export class TephrameshSettingTab extends PluginSettingTab {
       link.setAttribute("target", "_blank");
       link.setAttribute("rel", "noopener noreferrer");
       const status = setting.descEl.createDiv({ cls: "tephramesh-status" });
-      this.statusElements.set(instance.id, status);
-      this.updateStatusElement(status, this.plugin.runtimeStatuses.get(instance.id));
+      if (instance.setupState === "pending") {
+        status.addClass("is-pending");
+        status.setText("pending setup · waiting for the active mesh to become ready");
+        setting.addButton((button) => {
+          button.buttonEl.addClass("tephramesh-pending-button");
+          button.setButtonText("Pending setup").onClick(async () => {
+            button.setDisabled(true).setButtonText("Checking…");
+            try {
+              await this.plugin.completePendingInstance(instance);
+              this.display();
+              showTephrameshNotice(
+                "success",
+                "Instance setup complete",
+                `${instance.name} is now part of the mesh.`,
+              );
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              showTephrameshNotice(
+                error instanceof MeshNotReadyError ? "warning" : "error",
+                error instanceof MeshNotReadyError ? "Mesh not ready" : "Pending setup failed",
+                message,
+              );
+              button.setDisabled(false).setButtonText("Pending setup");
+            }
+          });
+        });
+      } else {
+        this.statusElements.set(instance.id, status);
+        this.updateStatusElement(status, this.plugin.runtimeStatuses.get(instance.id));
+      }
       setting.addButton((button) =>
         button.setIcon("pencil").setTooltip("Edit Syncthing URL").onClick(() => {
           const apiKey = this.plugin.getApiKey(instance.id);
@@ -325,12 +354,15 @@ export class TephrameshSettingTab extends PluginSettingTab {
             .setTooltip("Remove instance and Syncthing folder")
             .onClick(() => {
               new RemoveInstanceModal(this.app, instance, async () => {
+                const wasPending = instance.setupState === "pending";
                 await this.plugin.removeInstance(instance);
                 this.display();
                 showTephrameshNotice(
                   "success",
                   "Instance removed",
-                  `The managed Syncthing folder was removed from ${instance.name}. Files on disk were preserved.`,
+                  wasPending
+                    ? `${instance.name} was forgotten. Any partially created managed folder was removed; files on disk were preserved.`
+                    : `The managed Syncthing folder was removed from ${instance.name}. Files on disk were preserved.`,
                 );
               }).open();
             }),
@@ -380,6 +412,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
         this.plugin.setKnownHealthy(result.instance.id, result.version);
         this.display();
         await this.plugin.refreshStatuses();
+      },
+      async (result, apiKey) => {
+        await this.plugin.savePendingInstance(result.instance, apiKey);
+        this.plugin.setKnownHealthy(result.instance.id, result.version);
+        this.display();
       },
     ).open();
   }

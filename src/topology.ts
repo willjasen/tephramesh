@@ -8,6 +8,10 @@ import type {
 
 export type MeshRuntimeState = "idle" | "scanning" | "syncing" | "checking" | "unavailable";
 
+export function activeMeshInstances(instances: MeshInstance[]): MeshInstance[] {
+  return instances.filter((instance) => instance.setupState !== "pending");
+}
+
 export function meshRuntimeState(
   statuses: Array<InstanceRuntimeStatus | undefined>,
 ): MeshRuntimeState {

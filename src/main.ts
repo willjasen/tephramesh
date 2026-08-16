@@ -1,13 +1,13 @@
 import { Plugin } from "obsidian";
 import { DEFAULT_SETTINGS, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings } from "./model";
 import { TephrameshSettingTab } from "./settings-tab";
-import { SyncthingClient } from "./syncthing-client";
+import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
 import { showTephrameshNotice } from "./notices";
 import { localSyncthingDeviceName } from "./syncthing-device";
 import { MeshNotReadyError } from "./mesh-errors";
 import { generateShardPassword, sha256Hex } from "./security";
 import { trafficRates } from "./syncthing-traffic";
-import { meshPeerPolicy } from "./topology";
+import { activeMeshInstances, meshPeerPolicy } from "./topology";
 import {
   AGE_IDENTITY_SECRET_NAME,
   decryptProtectedData,
@@ -217,6 +217,22 @@ export default class TephrameshPlugin extends Plugin {
     await this.persistSecrets();
   }
 
+  async savePendingInstance(instance: MeshInstance, apiKey: string): Promise<void> {
+    if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
+    instance.setupState = "pending";
+    this.settings.instances.push(instance);
+    this.secrets.apiKeys[instance.id] = apiKey;
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      this.settings.instances = this.settings.instances.filter(
+        (candidate) => candidate.id !== instance.id,
+      );
+      delete this.secrets.apiKeys[instance.id];
+      throw error;
+    }
+  }
+
   private async persistSecrets(): Promise<void> {
     if (!this.secrets || !this.settings.ageRecipient) {
       throw new Error("Tephramesh encryption is not configured.");
@@ -258,8 +274,9 @@ export default class TephrameshPlugin extends Plugin {
 
   async assertMeshReadyForInstanceAdd(): Promise<void> {
     const problems: string[] = [];
+    const activeInstances = activeMeshInstances(this.settings.instances);
     await Promise.all(
-      this.settings.instances.map(async (instance) => {
+      activeInstances.map(async (instance) => {
         try {
           const apiKey = this.getApiKey(instance.id);
           if (!apiKey) throw new Error("API key unavailable");
@@ -299,7 +316,8 @@ export default class TephrameshPlugin extends Plugin {
     const candidateClient = new SyncthingClient(candidate.endpoint, candidateApiKey);
     const shardKey = this.getShardEncryptionKey() ?? "";
 
-    for (const existing of this.settings.instances) {
+    for (const existing of activeMeshInstances(this.settings.instances)) {
+      if (existing.id === candidate.id) continue;
       const existingApiKey = this.getApiKey(existing.id);
       if (!existingApiKey) {
         throw new Error(`API key unavailable for ${existing.name}.`);
@@ -331,20 +349,103 @@ export default class TephrameshPlugin extends Plugin {
     }
   }
 
+  async completePendingInstance(candidate: MeshInstance): Promise<void> {
+    if (candidate.setupState !== "pending") return;
+    await this.assertMeshReadyForInstanceAdd();
+    const apiKey = this.getApiKey(candidate.id);
+    if (!apiKey) throw new Error(`API key unavailable for ${candidate.name}.`);
+    const client = new SyncthingClient(candidate.endpoint, apiKey);
+    const [system, devices, folders] = await Promise.all([
+      client.getSystemStatus(),
+      client.getDevices(),
+      client.getFolders(),
+    ]);
+    if (system.myID !== candidate.deviceId) {
+      throw new Error("The pending URL now reports a different Syncthing device ID.");
+    }
+    const currentName = localSyncthingDeviceName(devices, system.myID);
+    if (!currentName) throw new Error("Syncthing did not report its local device name.");
+    candidate.name = currentName;
+
+    const normalizePath = (value: string) => value.replace(/[\\/]+$/, "");
+    const expectedPath = normalizePath(candidate.folderPath);
+    const byId = folders.find((folder) => folder.id === this.settings.folderId);
+    const byPath = folders.find(
+      (folder) => normalizePath(folder.path) === expectedPath,
+    );
+    if (byId && normalizePath(byId.path) !== expectedPath) {
+      throw new Error(
+        `Folder ID “${this.settings.folderId}” already uses a different path on ${candidate.name}.`,
+      );
+    }
+    if (byPath && byPath.id !== this.settings.folderId) {
+      throw new Error(
+        `The pending path belongs to Syncthing folder “${byPath.id}”.`,
+      );
+    }
+    const expectedType = candidate.kind === "shard" ? "receiveencrypted" : "sendreceive";
+    if (byId && byId.type !== expectedType) {
+      throw new Error(
+        `The managed folder on ${candidate.name} has type “${byId.type}”, expected “${expectedType}”.`,
+      );
+    }
+    if (!byId) {
+      await client.createFolder(
+        this.settings.folderId,
+        this.settings.folderLabel,
+        candidate.folderPath,
+        expectedType,
+      );
+    } else if (byId.label !== this.settings.folderLabel) {
+      await client.updateFolderLabel(this.settings.folderId, this.settings.folderLabel);
+    }
+
+    await this.reconcileNewInstance(candidate);
+    delete candidate.setupState;
+    await this.saveSettings();
+    await this.refreshInstanceStatus(candidate);
+  }
+
   async removeInstance(instance: MeshInstance): Promise<void> {
     const remaining = this.settings.instances.filter(
       (candidate) => candidate.id !== instance.id,
     );
+    const remainingActive = activeMeshInstances(remaining);
     const removedApiKey = this.getApiKey(instance.id);
     if (!removedApiKey) {
       throw new Error(`API key unavailable for ${instance.name}.`);
     }
     const removedClient = new SyncthingClient(instance.endpoint, removedApiKey);
-    const remainingClients = remaining.map((candidate) => {
+    const remainingClients = remainingActive.map((candidate) => {
       const apiKey = this.getApiKey(candidate.id);
       if (!apiKey) throw new Error(`API key unavailable for ${candidate.name}.`);
       return new SyncthingClient(candidate.endpoint, apiKey);
     });
+
+    if (instance.setupState === "pending") {
+      await Promise.all([
+        removedClient.getSystemStatus(),
+        ...remainingClients.map((client) => client.getSystemStatus()),
+      ]);
+      for (const client of remainingClients) {
+        await client.removeFolderPeer(this.settings.folderId, instance.deviceId);
+      }
+      const pendingFolder = await removedClient
+        .getFolder(this.settings.folderId)
+        .catch((error: unknown) => {
+          if (error instanceof SyncthingApiError && error.status === 404) {
+            return undefined;
+          }
+          throw error;
+        });
+      if (pendingFolder) await removedClient.removeFolder(this.settings.folderId);
+      this.settings.instances = remaining;
+      this.runtimeStatuses.delete(instance.id);
+      if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
+      delete this.secrets.apiKeys[instance.id];
+      await this.persistSecrets();
+      return;
+    }
 
     // Verify every required API and folder before changing any configuration.
     await Promise.all([
@@ -384,9 +485,10 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   private async syncFolderLabelToAll(label: string): Promise<void> {
-    if (!this.settings.folderId || this.settings.instances.length === 0) return;
+    const activeInstances = activeMeshInstances(this.settings.instances);
+    if (!this.settings.folderId || activeInstances.length === 0) return;
     const results = await Promise.allSettled(
-      this.settings.instances.map(async (instance) => {
+      activeInstances.map(async (instance) => {
         const apiKey = this.getApiKey(instance.id);
         if (!apiKey) throw new Error("API key unavailable");
         const client = new SyncthingClient(instance.endpoint, apiKey);
@@ -396,7 +498,7 @@ export default class TephrameshPlugin extends Plugin {
     );
     const failures = results.flatMap((result, index) =>
       result.status === "rejected"
-        ? [this.settings.instances[index]?.name ?? "Unknown instance"]
+        ? [activeInstances[index]?.name ?? "Unknown instance"]
         : [],
     );
     const updated = results.length - failures.length;
@@ -469,7 +571,9 @@ export default class TephrameshPlugin extends Plugin {
           ? client.getFolderStatus(this.settings.folderId).catch(() => undefined)
           : Promise.resolve(undefined),
         checkName ? client.getDevices() : Promise.resolve(undefined),
-        checkName && this.settings.folderId
+        checkName &&
+          instance.setupState !== "pending" &&
+          this.settings.folderId
           ? client.getFolder(this.settings.folderId).catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
