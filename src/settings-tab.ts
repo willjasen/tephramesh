@@ -63,9 +63,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderEncryptionSetup(container: HTMLElement): void {
-    container.createEl("h2", { text: "Protect plugin secrets" });
+    container.createEl("h2", { text: "Tephramesh initial setup" });
     container.createEl("p", {
-      text: "Before connecting Syncthing, protect its secrets with a dedicated age identity. Tephramesh can generate a post-quantum key locally, or you can import an existing native age identity.",
+      text: "Generate a dedicated post-quantum age identity to protect the plugin configuration.",
     });
     new Setting(container)
       .setName("Generate post-quantum identity")
@@ -94,54 +94,12 @@ export class TephrameshSettingTab extends PluginSettingTab {
           }
         }),
       );
-    container.createEl("h3", { text: "Use an existing identity" });
-    let recipient = "";
-    let identity = "";
-    new Setting(container)
-      .setName("Age public recipient")
-      .setDesc("Begins with age1 and may be stored in plugin configuration.")
-      .addText((text) =>
-        text.setPlaceholder("age1…").onChange((value) => {
-          recipient = value.trim();
-        }),
-      );
-    new Setting(container)
-      .setName("Age private identity")
-      .setDesc("Begins with AGE-SECRET-KEY-1 or AGE-SECRET-KEY-PQ-1 and stays in this app's Keychain.")
-      .addText((text) => {
-        text.inputEl.type = "password";
-        text.setPlaceholder("AGE-SECRET-KEY-1…").onChange((value) => {
-          identity = value.trim();
-        });
-      });
-    new Setting(container).addButton((button) =>
-      button.setButtonText("Configure encryption").setCta().onClick(async () => {
-        button.setDisabled(true).setButtonText("Configuring…");
-        try {
-          await this.plugin.configureEncryption(recipient, identity);
-          identity = "";
-          this.display();
-          showTephrameshNotice(
-            "success",
-            "Encryption configured",
-            "Tephramesh secrets will now be stored in an age-encrypted bundle.",
-          );
-        } catch (error) {
-          showTephrameshNotice(
-            "error",
-            "Encryption setup failed",
-            error instanceof Error ? error.message : String(error),
-          );
-          button.setDisabled(false).setButtonText("Configure encryption");
-        }
-      }),
-    );
   }
 
   private renderEncryptionUnlock(container: HTMLElement): void {
     container.createEl("h2", { text: "Unlock Tephramesh" });
     container.createEl("p", {
-      text: "This vault contains age-encrypted Tephramesh secrets. Enter the matching private identity once on this Obsidian installation.",
+      text: "This vault already contains an age-encrypted Tephramesh configuration and its public recipient. Enter the matching private identity once on this Obsidian installation.",
     });
     let identity = "";
     new Setting(container)
@@ -306,9 +264,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
     for (const instance of this.plugin.settings.instances) {
       const setting = new Setting(container);
       setting.nameEl.empty();
-      setting.nameEl.appendText(
-        `${instance.kind === "shard" ? "Shard" : "Device"}: ${instance.name}`,
-      );
+      setting.nameEl.createSpan({
+        text: instance.kind === "shard" ? "Shard" : "Device",
+        cls: `tephramesh-instance-kind is-${instance.kind}`,
+      });
+      setting.nameEl.appendText(` ${instance.name}`);
       setting.nameEl.createSpan({
         text: ` · ${shortDeviceId(instance.deviceId)}`,
         cls: "tephramesh-instance-heading-meta",
@@ -523,7 +483,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     status: InstanceRuntimeStatus | undefined,
   ): void {
     const version = status?.ok ? status.version : undefined;
-    element.setText(` · Syncthing ${version ?? "—"}`);
+    element.setText(` · ${version ?? "—"}`);
   }
 
   private updateStatusElement(

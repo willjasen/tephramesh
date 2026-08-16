@@ -57,6 +57,23 @@
   font-weight: var(--font-normal);
 }
 
+.tephramesh-instance-kind {
+  background: var(--interactive-accent);
+  border-radius: 999px;
+  color: var(--text-on-accent);
+  display: inline-block;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  line-height: 1.4;
+  padding: 0 var(--size-4-2);
+  vertical-align: 0.08em;
+}
+
+.tephramesh-instance-kind.is-shard {
+  background: var(--color-orange);
+  color: var(--text-on-accent);
+}
+
 .setting-item-description a.tephramesh-instance-url,
 .setting-item-description a.tephramesh-instance-url:visited {
   color: var(--text-accent);
