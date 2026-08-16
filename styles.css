@@ -52,6 +52,12 @@
   margin-top: var(--size-4-1);
 }
 
+.tephramesh-instance-card.setting-item {
+  min-height: 0;
+  padding-bottom: 0;
+  padding-top: var(--size-4-6);
+}
+
 .tephramesh-instance-heading-meta {
   color: var(--text-muted);
   font-weight: var(--font-normal);

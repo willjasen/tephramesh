@@ -264,6 +264,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
 
     for (const instance of this.plugin.settings.instances) {
       const setting = new Setting(container);
+      setting.settingEl.addClass("tephramesh-instance-card");
       setting.nameEl.empty();
       setting.nameEl.createSpan({
         text: instance.kind === "shard" ? "Shard" : "Device",
