@@ -1,0 +1,145 @@
+import { describe, expect, it } from "vitest";
+import type { MeshInstance } from "../src/model";
+import { createMeshPlan, meshPeerPolicy, meshRuntimeState } from "../src/topology";
+
+const endpoint = { protocol: "https" as const, hostname: "example.com", port: 8384 };
+const password = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";
+const instances: MeshInstance[] = [
+  {
+    id: "laptop",
+    name: "Laptop",
+    kind: "device",
+    endpoint,
+    deviceId: "LAPTOP-ID",
+    folderPath: "/home/me/vault",
+  },
+  {
+    id: "phone",
+    name: "Phone",
+    kind: "device",
+    endpoint,
+    deviceId: "PHONE-ID",
+    folderPath: "/storage/vault",
+  },
+  {
+    id: "shard",
+    name: "Shard",
+    kind: "shard",
+    endpoint,
+    deviceId: "SHARD-ID",
+    folderPath: "/srv/encrypted-vault",
+  },
+];
+
+describe("mesh planner", () => {
+  it("creates the complete graph and correct folder modes", () => {
+    const plan = createMeshPlan(instances, "vault-id", "My vault", password);
+    expect(plan.edgeCount).toBe(3);
+    expect(plan.instances).toHaveLength(3);
+    expect(plan.instances.find((item) => item.instanceId === "laptop")?.folder.type).toBe(
+      "sendreceive",
+    );
+    expect(plan.instances.find((item) => item.instanceId === "shard")?.folder.type).toBe(
+      "receiveencrypted",
+    );
+  });
+
+  it("only attaches the shard encryption key on trusted-to-shard shares", () => {
+    const plan = createMeshPlan(instances, "vault-id", "My vault", password);
+    const laptop = plan.instances.find((item) => item.instanceId === "laptop");
+    const shard = plan.instances.find((item) => item.instanceId === "shard");
+    expect(
+      laptop?.folder.devices.find((item) => item.deviceID === "SHARD-ID")
+        ?.encryptionPassword,
+    ).toBe(password);
+    expect(
+      laptop?.folder.devices.find((item) => item.deviceID === "PHONE-ID")
+        ?.encryptionPassword,
+    ).toBe("");
+    expect(shard?.folder.devices.every((item) => item.encryptionPassword === "")).toBe(true);
+  });
+
+  it("marks shards untrusted only from a trusted device's perspective", () => {
+    const plan = createMeshPlan(instances, "vault-id", "My vault", password);
+    const laptop = plan.instances.find((item) => item.instanceId === "laptop");
+    const shard = plan.instances.find((item) => item.instanceId === "shard");
+    expect(laptop?.devices.find((item) => item.deviceID === "SHARD-ID")?.untrusted).toBe(true);
+    expect(shard?.devices.find((item) => item.deviceID === "LAPTOP-ID")?.untrusted).toBe(false);
+  });
+
+  it("shares directly between multiple shards without attaching the key", () => {
+    const secondShard: MeshInstance = {
+      id: "second-shard",
+      name: "Second shard",
+      kind: "shard",
+      endpoint,
+      deviceId: "SECOND-SHARD-ID",
+      folderPath: "/srv/second-encrypted-vault",
+    };
+    const firstShard = instances[2]!;
+    expect(meshPeerPolicy(firstShard, secondShard, password)).toEqual({
+      untrusted: false,
+      encryptionPassword: "",
+    });
+    expect(meshPeerPolicy(secondShard, firstShard, password)).toEqual({
+      untrusted: false,
+      encryptionPassword: "",
+    });
+
+    const plan = createMeshPlan(
+      [...instances, secondShard],
+      "vault-id",
+      "My vault",
+      password,
+    );
+    expect(plan.edgeCount).toBe(6);
+    for (const shard of [firstShard, secondShard]) {
+      const shardPlan = plan.instances.find((item) => item.instanceId === shard.id);
+      const otherId = shard.id === firstShard.id
+        ? secondShard.deviceId
+        : firstShard.deviceId;
+      expect(shardPlan?.folder.devices).toContainEqual({
+        deviceID: otherId,
+        introducedBy: "",
+        encryptionPassword: "",
+      });
+    }
+  });
+
+  it("requires a password as soon as a shard exists", () => {
+    expect(() => createMeshPlan(instances, "vault-id", "My vault", "")).toThrow(
+      /shard encryption key/i,
+    );
+  });
+});
+
+describe("mesh runtime state", () => {
+  const status = (state: string) => ({
+    checkedAt: 1,
+    ok: true,
+    folder: {
+      state,
+      localFiles: 1,
+      globalFiles: 1,
+      needFiles: 0,
+      needBytes: 0,
+    },
+  });
+
+  it("prioritizes scanning over syncing and idle", () => {
+    expect(meshRuntimeState([status("idle"), status("syncing"), status("scanning")])).toBe("scanning");
+  });
+
+  it("shows syncing when any instance is syncing", () => {
+    expect(meshRuntimeState([status("idle"), status("syncing")])).toBe("syncing");
+  });
+
+  it("only shows idle when every instance is idle", () => {
+    expect(meshRuntimeState([status("idle"), status("idle")])).toBe("idle");
+  });
+
+  it("reports unavailable and incomplete samples safely", () => {
+    expect(meshRuntimeState([{ checkedAt: 1, ok: false }])).toBe("unavailable");
+    expect(meshRuntimeState([undefined])).toBe("checking");
+  });
+});

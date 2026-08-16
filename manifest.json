@@ -1,0 +1,10 @@
+{
+  "id": "tephramesh",
+  "name": "Tephramesh",
+  "version": "0.1.0",
+  "minAppVersion": "1.11.5",
+  "description": "Manage a private Syncthing mesh for this Obsidian vault.",
+  "author": "willjasen",
+  "authorUrl": "https://github.com/willjasen",
+  "isDesktopOnly": false
+}

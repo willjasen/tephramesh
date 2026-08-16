@@ -1,0 +1,224 @@
+.tephramesh-tabs {
+  border-bottom: 1px solid var(--background-modifier-border);
+  display: flex;
+  gap: var(--size-4-1);
+  margin-bottom: var(--size-4-4);
+  overflow-x: auto;
+}
+
+.tephramesh-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--text-muted);
+  margin: 0;
+  padding: var(--size-4-2) var(--size-4-3);
+}
+
+.tephramesh-tab:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.tephramesh-tab.is-active {
+  border-bottom-color: var(--interactive-accent);
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
+
+.tephramesh-tab-content {
+  min-width: 0;
+}
+
+.tephramesh-heading-row {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 1.5em;
+}
+
+.tephramesh-heading-row h2 {
+  margin: 0;
+}
+
+.tephramesh-heading-row button + button {
+  margin-left: var(--size-4-2);
+}
+
+.tephramesh-status {
+  color: var(--text-success);
+  margin-top: var(--size-4-1);
+}
+
+.tephramesh-instance-heading-meta {
+  color: var(--text-muted);
+  font-weight: var(--font-normal);
+}
+
+.setting-item-description a.tephramesh-instance-url,
+.setting-item-description a.tephramesh-instance-url:visited {
+  color: var(--text-accent);
+  text-decoration-line: var(--link-decoration);
+}
+
+.setting-item-description a.tephramesh-instance-url:hover {
+  color: var(--text-accent-hover);
+}
+
+.tephramesh-status.is-error {
+  color: var(--text-error);
+}
+
+.tephramesh-status.is-scanning,
+.tephramesh-status.is-syncing {
+  color: var(--color-blue, #59c2ff);
+}
+
+.tephramesh-topology {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  padding: var(--size-4-4);
+}
+
+.tephramesh-topology-status {
+  align-items: flex-start;
+  display: flex;
+  gap: var(--size-4-3);
+}
+
+.tephramesh-topology-status strong {
+  display: block;
+  font-size: var(--font-ui-medium);
+}
+
+.tephramesh-topology.is-valid .tephramesh-topology-status strong {
+  color: var(--text-success);
+}
+
+.tephramesh-topology.is-incomplete .tephramesh-topology-status strong {
+  color: var(--text-warning);
+}
+
+.tephramesh-topology-indicator {
+  background: var(--text-success);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  height: 0.65rem;
+  margin-top: 0.35rem;
+  width: 0.65rem;
+}
+
+.tephramesh-topology.is-incomplete .tephramesh-topology-indicator {
+  background: var(--text-warning);
+}
+
+.tephramesh-topology-subtitle {
+  color: var(--text-muted);
+  margin-top: var(--size-4-1);
+}
+
+.tephramesh-topology-runtime {
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  margin-left: auto;
+  padding: var(--size-4-1) var(--size-4-2);
+  text-transform: lowercase;
+}
+
+.tephramesh-topology-runtime.is-idle {
+  color: var(--text-success);
+}
+
+.tephramesh-topology-runtime.is-scanning,
+.tephramesh-topology-runtime.is-syncing {
+  color: var(--color-blue, #59c2ff);
+}
+
+.tephramesh-topology-runtime.is-unavailable {
+  color: var(--text-error);
+}
+
+.tephramesh-topology-metrics {
+  display: grid;
+  gap: var(--size-4-2);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: var(--size-4-4);
+}
+
+.tephramesh-topology-metric {
+  background: var(--background-primary);
+  border-radius: var(--radius-s);
+  display: flex;
+  flex-direction: column;
+  padding: var(--size-4-3);
+}
+
+.tephramesh-topology-metric strong {
+  font-size: 1.4em;
+  line-height: 1.2;
+}
+
+.tephramesh-topology-metric span,
+.tephramesh-topology-detail span,
+.tephramesh-topology-details p {
+  color: var(--text-muted);
+}
+
+.tephramesh-topology-details {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: var(--size-4-4);
+  padding-top: var(--size-4-3);
+}
+
+.tephramesh-topology-detail {
+  display: grid;
+  gap: var(--size-4-3);
+  grid-template-columns: minmax(5rem, 0.35fr) 1fr;
+  padding: var(--size-4-1) 0;
+}
+
+.tephramesh-topology-details p {
+  margin: var(--size-4-2) 0 0;
+}
+
+@media (max-width: 500px) {
+  .tephramesh-topology-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .tephramesh-topology-detail {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+
+.tephramesh-instance-modal .setting-item-control input[type="text"] {
+  min-width: 16rem;
+}
+
+.tephramesh-notice-title {
+  display: block;
+  font-weight: var(--font-semibold);
+  margin-bottom: var(--size-4-1);
+}
+
+.tephramesh-notice-title.is-success {
+  color: var(--text-success);
+}
+
+.tephramesh-notice-title.is-warning {
+  color: var(--text-warning);
+}
+
+.tephramesh-notice-title.is-error {
+  color: var(--text-error);
+}
+
+.tephramesh-notice-message {
+  color: var(--text-normal);
+}
