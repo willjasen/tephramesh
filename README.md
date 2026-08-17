@@ -19,6 +19,10 @@ tephramesh handles sharing and accepting the vault folder between syncthing devi
 
 tephramesh can currently be installed using brat, an obsidian plugin manager.
 
+below is a screenshot of a topology screen, showing two devices and two shards currently online:
+<img width="645" height="454" alt="Screenshot 2026-08-17 at 6 49 00 PM" src="https://github.com/user-attachments/assets/c118477d-3097-4f1a-8dc7-39f77dc310dc" />
+
+
 # Comments
 
 i've seen a lot of interest in syncing obsidian vaults. naturally, there is obsidian sync but it's a paid service (though the team should be supported - i have a catalyst license). i used icloud for a while and it works well until it doesn't. syncthing is distributed and private, so why not - let's make it happen.
