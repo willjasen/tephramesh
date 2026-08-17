@@ -1,5 +1,6 @@
 import {
   App,
+  ButtonComponent,
   PluginSettingTab,
   Setting,
 } from "obsidian";
@@ -39,6 +40,7 @@ const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 export class TephrameshSettingTab extends PluginSettingTab {
   private statusElements = new Map<string, HTMLElement>();
   private versionElements = new Map<string, HTMLElement>();
+  private pauseButtons = new Map<string, ButtonComponent>();
   private topologyElement?: HTMLElement;
   private reconciliationElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
@@ -71,6 +73,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     containerEl.addClass("tephramesh-settings");
     this.statusElements.clear();
     this.versionElements.clear();
+    this.pauseButtons.clear();
     this.topologyElement = undefined;
     this.reconciliationElement = undefined;
     containerEl.createEl("h1", { text: "Tephramesh" });
@@ -166,6 +169,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
     }
     for (const [instanceId, element] of this.versionElements) {
       this.updateVersionElement(element, statuses.get(instanceId));
+    }
+    for (const [instanceId, button] of this.pauseButtons) {
+      this.updatePauseButton(button, statuses.get(instanceId));
     }
     this.updateTopology();
   }
@@ -386,6 +392,38 @@ export class TephrameshSettingTab extends PluginSettingTab {
       } else {
         this.statusElements.set(instance.id, status);
         this.updateStatusElement(status, this.plugin.runtimeStatuses.get(instance.id));
+        setting.addButton((button) => {
+          this.pauseButtons.set(instance.id, button);
+          this.updatePauseButton(
+            button,
+            this.plugin.runtimeStatuses.get(instance.id),
+          );
+          button.onClick(async () => {
+            const paused = Boolean(
+              this.plugin.runtimeStatuses.get(instance.id)?.folderPaused,
+            );
+            button.setDisabled(true);
+            try {
+              await this.plugin.setInstanceFolderPaused(instance, !paused);
+              showTephrameshNotice(
+                "success",
+                paused ? "Folder resumed" : "Folder paused",
+                `${instance.name}'s managed folder is now ${paused ? "active" : "paused"}.`,
+              );
+            } catch (error) {
+              showTephrameshNotice(
+                "error",
+                paused ? "Resume failed" : "Pause failed",
+                error instanceof Error ? error.message : String(error),
+              );
+            } finally {
+              this.updatePauseButton(
+                button,
+                this.plugin.runtimeStatuses.get(instance.id),
+              );
+            }
+          });
+        });
       }
       setting.addButton((button) =>
         button.setIcon("pencil").setTooltip("Edit Syncthing URL").onClick(() => {
@@ -677,12 +715,23 @@ export class TephrameshSettingTab extends PluginSettingTab {
     element.setText(` · ${version ?? "—"}`);
   }
 
+  private updatePauseButton(
+    button: ButtonComponent,
+    status: InstanceRuntimeStatus | undefined,
+  ): void {
+    const paused = Boolean(status?.folderPaused);
+    button
+      .setIcon(paused ? "play" : "pause")
+      .setTooltip(paused ? "Resume managed folder" : "Pause managed folder")
+      .setDisabled(!status?.ok || !status.folder);
+  }
+
   private updateStatusElement(
     element: HTMLElement,
     status: InstanceRuntimeStatus | undefined,
   ): void {
     element.empty();
-    element.removeClass("is-error", "is-scanning", "is-syncing");
+    element.removeClass("is-error", "is-scanning", "is-syncing", "is-paused");
     if (!status) {
       element.setText("Not checked yet");
       return;
@@ -698,6 +747,14 @@ export class TephrameshSettingTab extends PluginSettingTab {
     }
     const folder = status.folder;
     const pending = folder.needFiles ?? 0;
+    if (status.folderPaused) {
+      element.addClass("is-paused");
+      element.createDiv({
+        text: `paused · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,
+      });
+      this.renderPendingFiles(element, status.pendingFiles);
+      return;
+    }
     if (folder.state === "scanning") {
       element.addClass("is-scanning");
       const progress = folder.scanProgress;

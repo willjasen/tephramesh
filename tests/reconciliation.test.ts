@@ -178,4 +178,12 @@ describe("mesh reconciliation inspection", () => {
       "Device must be idle and fully synchronized.",
     ]);
   });
+
+  it("blocks repair while a managed folder is paused", () => {
+    const current = snapshot(device);
+    current.folders[0]!.paused = true;
+    expect(repairBlockedReasons([current])).toEqual([
+      "Device's managed folder must be resumed.",
+    ]);
+  });
 });

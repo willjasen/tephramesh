@@ -339,10 +339,15 @@ export default class TephrameshPlugin extends Plugin {
         try {
           const apiKey = this.getApiKey(instance.id);
           if (!apiKey) throw new Error("API key unavailable");
-          const status = await new SyncthingClient(
-            instance.endpoint,
-            apiKey,
-          ).getFolderStatus(this.settings.folderId);
+          const client = new SyncthingClient(instance.endpoint, apiKey);
+          const [status, folder] = await Promise.all([
+            client.getFolderStatus(this.settings.folderId),
+            client.getFolder(this.settings.folderId),
+          ]);
+          if (folder.paused) {
+            problems.push(`${instance.name}'s managed folder is paused.`);
+            return;
+          }
           if (status.state !== "idle") {
             problems.push(`${instance.name} is ${status.state}.`);
             return;
@@ -1034,8 +1039,7 @@ export default class TephrameshPlugin extends Plugin {
           ? client.getFolderStatus(this.settings.folderId).catch(() => undefined)
           : Promise.resolve(undefined),
         checkName ? client.getDevices() : Promise.resolve(undefined),
-        checkName &&
-          instance.setupState !== "pending" &&
+        instance.setupState !== "pending" &&
           this.settings.folderId
           ? client.getFolder(this.settings.folderId).catch(() => undefined)
           : Promise.resolve(undefined),
@@ -1094,6 +1098,7 @@ export default class TephrameshPlugin extends Plugin {
         version: version.version,
         deviceId: system.myID,
         folder,
+        folderPaused: Boolean(folderConfig?.paused),
         pendingFiles,
         traffic,
         ...rates,
@@ -1113,5 +1118,24 @@ export default class TephrameshPlugin extends Plugin {
       this.settingTab.refreshRuntimeStatuses(this.runtimeStatuses);
     }
     return nameChanged;
+  }
+
+  async setInstanceFolderPaused(
+    instance: MeshInstance,
+    paused: boolean,
+  ): Promise<void> {
+    if (instance.setupState === "pending") {
+      throw new Error("Complete this instance's setup before pausing its folder.");
+    }
+    const apiKey = this.getApiKey(instance.id);
+    if (!apiKey) {
+      throw new Error("API key is unavailable in the encrypted configuration");
+    }
+    await new SyncthingClient(instance.endpoint, apiKey).setFolderPaused(
+      this.settings.folderId,
+      paused,
+    );
+    await this.refreshInstanceStatus(instance);
+    this.nextReconciliationAt = 0;
   }
 }

@@ -191,6 +191,14 @@ export function repairBlockedReasons(
 ): string[] {
   const reasons: string[] = [];
   for (const snapshot of snapshots) {
+    const managedFolder = snapshot.folders.find(
+      (folder) =>
+        normalizedPath(folder.path) === normalizedPath(snapshot.instance.folderPath),
+    );
+    if (managedFolder?.paused) {
+      reasons.push(`${snapshot.instance.name}'s managed folder must be resumed.`);
+      continue;
+    }
     const status = snapshot.folderStatus;
     if (!status) continue;
     const errors = (status.errors ?? 0) + (status.pullErrors ?? 0);

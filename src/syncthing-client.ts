@@ -104,6 +104,22 @@ export class SyncthingClient {
     }
   }
 
+  async setFolderPaused(folderId: string, paused: boolean): Promise<void> {
+    await this.request<void>(
+      `/rest/config/folders/${encodeURIComponent(folderId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ paused }),
+      },
+    );
+    const updated = await this.getFolder(folderId);
+    if (Boolean(updated.paused) !== paused) {
+      throw new SyncthingApiError(
+        `Syncthing did not ${paused ? "pause" : "resume"} the managed folder.`,
+      );
+    }
+  }
+
   async removeFolder(folderId: string): Promise<void> {
     await this.request<void>(
       `/rest/config/folders/${encodeURIComponent(folderId)}`,
