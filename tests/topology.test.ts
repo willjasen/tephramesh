@@ -147,6 +147,11 @@ describe("mesh runtime state", () => {
     expect(meshRuntimeState([status("idle"), status("sync-preparing")])).toBe("syncing");
   });
 
+  it("treats sync waiting as active syncing", () => {
+    expect(isSyncthingSyncState("sync-waiting")).toBe(true);
+    expect(meshRuntimeState([status("idle"), status("sync-waiting")])).toBe("syncing");
+  });
+
   it("only shows idle when every instance is idle", () => {
     expect(meshRuntimeState([status("idle"), status("idle")])).toBe("idle");
   });

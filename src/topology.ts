@@ -23,7 +23,7 @@ export function canRemoveInstance(
 }
 
 export function isSyncthingSyncState(state: string | undefined): boolean {
-  return state === "syncing" || state === "sync-preparing";
+  return state === "syncing" || state === "sync-preparing" || state === "sync-waiting";
 }
 
 export function meshRuntimeStates(
