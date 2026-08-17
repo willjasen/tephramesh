@@ -104,6 +104,26 @@ button.tephramesh-pending-button {
   color: var(--color-blue, #59c2ff);
 }
 
+.tephramesh-pending-files {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin: var(--size-4-1) 0 0;
+  max-height: 10em;
+  overflow: auto;
+  padding-left: var(--size-4-5);
+}
+
+.tephramesh-pending-files-label {
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  margin-top: var(--size-4-2);
+}
+
+.tephramesh-pending-files li {
+  overflow-wrap: anywhere;
+}
+
 .tephramesh-topology {
   background: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
@@ -261,7 +281,8 @@ button.tephramesh-pending-button {
   color: var(--text-normal);
 }
 
-.nav-file-title > .tephramesh-note-sync-icon {
+.nav-file-title > .tephramesh-note-sync-icon,
+.nav-folder-title > .tephramesh-folder-sync-icon {
   align-items: center;
   color: var(--color-blue, #59c2ff);
   display: inline-flex;
@@ -271,8 +292,40 @@ button.tephramesh-pending-button {
   width: 18px;
 }
 
-.nav-file-title > .tephramesh-note-sync-icon > svg {
+.nav-file-title > .tephramesh-note-sync-icon > svg,
+.nav-folder-title > .tephramesh-folder-sync-icon > svg {
   height: 18px;
   stroke-width: 2.25;
   width: 18px;
+}
+
+.tephramesh-reconciliation {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: var(--size-4-4);
+}
+
+.tephramesh-reconciliation.is-healthy .setting-item-name {
+  color: var(--text-success);
+}
+
+.tephramesh-reconciliation.is-issues .setting-item-name,
+.tephramesh-reconciliation.is-checking .setting-item-name,
+.tephramesh-reconciliation.is-repairing .setting-item-name {
+  color: var(--text-warning);
+}
+
+.tephramesh-reconciliation.is-unavailable .setting-item-name,
+.tephramesh-reconciliation-issues .is-blocking {
+  color: var(--text-error);
+}
+
+.tephramesh-reconciliation-issues {
+  color: var(--text-muted);
+  margin: 0 0 var(--size-4-3);
+  padding-left: var(--size-4-6);
+}
+
+.tephramesh-reconciliation-blocked {
+  color: var(--text-warning);
+  margin: 0 0 var(--size-4-3);
 }

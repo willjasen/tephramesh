@@ -7,7 +7,7 @@
 set -euo pipefail
 
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_DIR="${TEPHRAMESH_TEST_PLUGIN_DIR:-/Users/willjasen/Library/Mobile Documents/iCloud~md~obsidian/Documents/testing/.obsidian/plugins/tephramesh}"
+PLUGIN_DIR="${TEPHRAMESH_TEST_PLUGIN_DIR:-/Users/willjasen/AppData/Syncthing/Notebox/.obsidian/plugins/tephramesh}"
 PLUGIN_DIR="${PLUGIN_DIR%/}"
 FILES=("main.js" "manifest.json" "styles.css")
 

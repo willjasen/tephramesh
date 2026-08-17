@@ -25,6 +25,7 @@ import { syncProgress } from "./syncthing-progress";
 import { formatTransferRate } from "./syncthing-traffic";
 import { EditEndpointModal } from "./edit-endpoint-modal";
 import { MeshNotReadyError } from "./mesh-errors";
+import { DeleteConfigModal } from "./delete-config-modal";
 
 type SettingsSection = "instances" | "vault" | "topology";
 
@@ -38,6 +39,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private statusElements = new Map<string, HTMLElement>();
   private versionElements = new Map<string, HTMLElement>();
   private topologyElement?: HTMLElement;
+  private reconciliationElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
 
   constructor(app: App, private readonly plugin: TephrameshPlugin) {
@@ -51,6 +53,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     this.statusElements.clear();
     this.versionElements.clear();
     this.topologyElement = undefined;
+    this.reconciliationElement = undefined;
     containerEl.createEl("h1", { text: "Tephramesh" });
 
     if (!this.plugin.hasEncryptionConfigured()) {
@@ -146,6 +149,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
       this.updateVersionElement(element, statuses.get(instanceId));
     }
     this.updateTopology();
+  }
+
+  refreshReconciliationReport(): void {
+    this.updateReconciliation();
   }
 
   private renderOnboarding(container: HTMLElement): void {
@@ -269,6 +276,22 @@ export class TephrameshSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
             this.plugin.restartNoteSyncPolling();
           }),
+      );
+    new Setting(container)
+      .setName("Delete Config")
+      .setDesc("Erase Tephramesh's encrypted plugin data for this vault.")
+      .addButton((button) =>
+        button.setButtonText("Delete Config").setWarning().onClick(() => {
+          new DeleteConfigModal(this.app, async () => {
+            await this.plugin.deleteConfig();
+            this.display();
+            showTephrameshNotice(
+              "success",
+              "Config deleted",
+              "Tephramesh is ready for initial setup. Syncthing and vault files were not changed.",
+            );
+          }).open();
+        }),
       );
   }
 
@@ -448,10 +471,102 @@ export class TephrameshSettingTab extends PluginSettingTab {
     container.createEl("h2", { text: "Topology preview" });
     this.topologyElement = container.createDiv({ cls: "tephramesh-topology" });
     this.updateTopology();
-    new Setting(container)
-      .setName("Automatic reconciliation")
-      .setDesc("New instances are reconciled during Add. General repair of previously drifted topology is coming next.")
-      .addButton((button) => button.setButtonText("Coming next").setDisabled(true));
+    this.reconciliationElement = container.createDiv({
+      cls: "tephramesh-reconciliation",
+    });
+    this.updateReconciliation();
+    void this.plugin.refreshReconciliation();
+  }
+
+  private updateReconciliation(): void {
+    if (!this.reconciliationElement) return;
+    const container = this.reconciliationElement;
+    container.empty();
+    const report = this.plugin.reconciliationReport;
+    for (const state of [
+      "checking",
+      "healthy",
+      "issues",
+      "unavailable",
+      "repairing",
+    ]) {
+      container.toggleClass(`is-${state}`, state === report.state);
+    }
+
+    const setting = new Setting(container).setName("Automatic reconciliation");
+    const summary = {
+      checking: "Checking every active instance…",
+      healthy: "No mesh configuration issues found.",
+      issues: `${report.issues.length} mesh configuration issue${report.issues.length === 1 ? "" : "s"} found.`,
+      unavailable: "The complete mesh could not be inspected.",
+      repairing: "Applying and verifying mesh repairs…",
+    }[report.state];
+    setting.setDesc(summary);
+    setting.addButton((button) =>
+      button
+        .setIcon("search")
+        .setTooltip("Check mesh configuration now")
+        .setDisabled(report.state === "checking" || report.state === "repairing")
+        .onClick(async () => {
+          button.setDisabled(true);
+          await this.plugin.refreshReconciliation(true);
+        }),
+    );
+
+    const hasUnsafeIssue = report.issues.some((issue) => !issue.repairable);
+    const canRepair =
+      report.state === "issues" &&
+      !hasUnsafeIssue &&
+      report.repairBlockedReasons.length === 0;
+    setting.addButton((button) =>
+      button
+        .setButtonText(report.state === "repairing" ? "Repairing…" : "Repair mesh")
+        .setCta()
+        .setDisabled(!canRepair)
+        .onClick(async () => {
+          button.setDisabled(true).setButtonText("Repairing…");
+          try {
+            await this.plugin.repairMesh();
+            showTephrameshNotice(
+              "success",
+              "Mesh repaired",
+              "Every repair was verified against Syncthing.",
+            );
+          } catch (error) {
+            showTephrameshNotice(
+              error instanceof MeshNotReadyError ? "warning" : "error",
+              error instanceof MeshNotReadyError
+                ? "Mesh not ready for repair"
+                : "Mesh repair incomplete",
+              error instanceof Error ? error.message : String(error),
+            );
+            await this.plugin.refreshReconciliation(true);
+          }
+        }),
+    );
+
+    if (report.issues.length > 0) {
+      const list = container.createEl("ul", {
+        cls: "tephramesh-reconciliation-issues",
+      });
+      for (const currentIssue of report.issues) {
+        list.createEl("li", {
+          text: `${currentIssue.instanceName}: ${currentIssue.message}`,
+          cls: currentIssue.repairable ? "is-repairable" : "is-blocking",
+        });
+      }
+    }
+    if (report.repairBlockedReasons.length > 0) {
+      container.createDiv({
+        cls: "tephramesh-reconciliation-blocked",
+        text: `Repair is waiting: ${report.repairBlockedReasons.join(" ")}`,
+      });
+    } else if (hasUnsafeIssue) {
+      container.createDiv({
+        cls: "tephramesh-reconciliation-blocked",
+        text: "Repair is blocked until the unsafe configuration is corrected manually.",
+      });
+    }
   }
 
   private updateTopology(): void {
@@ -576,9 +691,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
     if (folder.state === "scanning") {
       element.addClass("is-scanning");
       const progress = folder.scanProgress;
-      element.setText(
-        `scanning · ${progress === undefined ? "calculating…" : `${progress}%`} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files`,
-      );
+      element.createDiv({
+        text: `scanning · ${progress === undefined ? "calculating…" : `${progress}%`} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files`,
+      });
+      this.renderPendingFiles(element, status.pendingFiles);
       return;
     }
     if (isSyncthingSyncState(folder.state)) {
@@ -586,13 +702,33 @@ export class TephrameshSettingTab extends PluginSettingTab {
     }
     if (folder.state === "syncing") {
       const progress = syncProgress(folder);
-      element.setText(
-        `syncing · ${progress === undefined ? "calculating…" : `${progress}%`} · ↓ ${formatTransferRate(status.downloadBytesPerSecond)} · ↑ ${formatTransferRate(status.uploadBytesPerSecond)} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,
-      );
+      element.createDiv({
+        text: `syncing · ${progress === undefined ? "calculating…" : `${progress}%`} · ↓ ${formatTransferRate(status.downloadBytesPerSecond)} · ↑ ${formatTransferRate(status.uploadBytesPerSecond)} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,
+      });
+      this.renderPendingFiles(element, status.pendingFiles);
       return;
     }
-    element.setText(
-      `${folder.state} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,
-    );
+    element.createDiv({
+      text: `${folder.state} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,
+    });
+    this.renderPendingFiles(element, status.pendingFiles);
+  }
+
+  private renderPendingFiles(
+    element: HTMLElement,
+    pendingFiles: string[] | undefined,
+  ): void {
+    if (!pendingFiles?.length) return;
+    element.createDiv({
+      cls: "tephramesh-pending-files-label",
+      text: "Pending files",
+    });
+    const list = element.createEl("ul", {
+      cls: "tephramesh-pending-files",
+      attr: { "aria-label": "Pending files" },
+    });
+    for (const path of pendingFiles) {
+      list.createEl("li", { text: path });
+    }
   }
 }

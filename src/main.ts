@@ -1,4 +1,4 @@
-import { Plugin, setIcon } from "obsidian";
+import { normalizePath, Plugin, setIcon } from "obsidian";
 import { DEFAULT_SETTINGS, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings } from "./model";
 import { TephrameshSettingTab } from "./settings-tab";
 import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
@@ -7,7 +7,15 @@ import { localSyncthingDeviceName } from "./syncthing-device";
 import { MeshNotReadyError } from "./mesh-errors";
 import { generateShardPassword, sha256Hex } from "./security";
 import { trafficRates } from "./syncthing-traffic";
-import { activeMeshInstances, meshPeerPolicy } from "./topology";
+import { activeMeshInstances, createMeshPlan, meshPeerPolicy } from "./topology";
+import { pendingFolderPaths } from "./note-sync";
+import {
+  inspectReconciliationSnapshot,
+  repairBlockedReasons,
+  type InstanceReconciliationSnapshot,
+  type ReconciliationIssue,
+  type ReconciliationReport,
+} from "./reconciliation";
 import {
   AGE_IDENTITY_SECRET_NAME,
   decryptProtectedData,
@@ -39,6 +47,11 @@ interface LegacyRootSecrets {
 export default class TephrameshPlugin extends Plugin {
   settings: TephrameshSettings = structuredClone(DEFAULT_SETTINGS);
   runtimeStatuses = new Map<string, InstanceRuntimeStatus>();
+  reconciliationReport: ReconciliationReport = {
+    state: "checking",
+    issues: [],
+    repairBlockedReasons: [],
+  };
   private secrets?: TephrameshSecrets;
   private encryptedData = "";
   private storageFormat: 2 | 3 = 3;
@@ -50,9 +63,12 @@ export default class TephrameshPlugin extends Plugin {
   private fileExplorerObserver?: MutationObserver;
   private refreshInProgress = false;
   private nextNameRefreshAt = 0;
+  private nextReconciliationAt = 0;
+  private reconciliationInProgress = false;
   private folderLabelSyncTimer?: number;
   private folderLabelSyncQueue: Promise<void> = Promise.resolve();
   private static readonly NAME_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+  private static readonly RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
   private static readonly LABEL_SYNC_DEBOUNCE_MS = 750;
 
   async onload(): Promise<void> {
@@ -71,6 +87,7 @@ export default class TephrameshPlugin extends Plugin {
     this.restartPolling();
     this.restartNoteSyncPolling();
     void this.refreshStatuses();
+    void this.refreshReconciliation();
   }
 
   onunload(): void {
@@ -92,6 +109,7 @@ export default class TephrameshPlugin extends Plugin {
     this.restartNoteSyncPolling();
     this.settingTab.display();
     void this.refreshStatuses(true);
+    void this.refreshReconciliation(true);
   }
 
   async loadSettings(): Promise<void> {
@@ -142,6 +160,35 @@ export default class TephrameshPlugin extends Plugin {
       ageRecipient,
       encryptedData: this.encryptedData,
     } satisfies EncryptedSettingsEnvelope);
+  }
+
+  async deleteConfig(): Promise<void> {
+    const pluginDirectory =
+      this.manifest.dir ??
+      `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    const dataPath = normalizePath(`${pluginDirectory}/data.json`);
+    if (await this.app.vault.adapter.exists(dataPath)) {
+      await this.app.vault.adapter.remove(dataPath);
+    }
+
+    this.settings = structuredClone(DEFAULT_SETTINGS);
+    this.secrets = undefined;
+    this.encryptedData = "";
+    this.storageFormat = 3;
+    this.runtimeStatuses.clear();
+    this.reconciliationReport = {
+      state: "checking",
+      issues: [],
+      repairBlockedReasons: [],
+    };
+    this.pendingNotePaths.clear();
+    this.clearNoteSyncBadges();
+    if (this.folderLabelSyncTimer !== undefined) {
+      window.clearTimeout(this.folderLabelSyncTimer);
+      this.folderLabelSyncTimer = undefined;
+    }
+    this.restartPolling();
+    this.restartNoteSyncPolling();
   }
 
   hasEncryptionConfigured(): boolean {
@@ -355,6 +402,228 @@ export default class TephrameshPlugin extends Plugin {
         existing.deviceId,
         candidatePolicy.encryptionPassword,
       );
+    }
+  }
+
+  private async inspectInstanceForReconciliation(
+    instance: MeshInstance,
+  ): Promise<InstanceReconciliationSnapshot> {
+    const apiKey = this.getApiKey(instance.id);
+    if (!apiKey) throw new Error("API key unavailable");
+    const client = new SyncthingClient(instance.endpoint, apiKey);
+    const [system, devices, folders, pendingDevices, pendingFolders] =
+      await Promise.all([
+        client.getSystemStatus(),
+        client.getDevices(),
+        client.getFolders(),
+        client.getPendingDevices(),
+        client.getPendingFolders(),
+      ]);
+    const hasManagedFolder = folders.some(
+      (folder) => folder.id === this.settings.folderId,
+    );
+    const folderStatus = hasManagedFolder
+      ? await client.getFolderStatus(this.settings.folderId)
+      : undefined;
+    return {
+      instance,
+      reportedDeviceId: system.myID,
+      devices,
+      folders,
+      folderStatus,
+      pendingDeviceIds: Object.keys(pendingDevices),
+      pendingFolderIds: Object.keys(pendingFolders),
+    };
+  }
+
+  async refreshReconciliation(force = false): Promise<ReconciliationReport> {
+    if (this.reconciliationInProgress) return this.reconciliationReport;
+    if (
+      !this.settings.onboardingComplete ||
+      !this.secretsAreUnlocked() ||
+      !this.settings.folderId
+    ) {
+      return this.reconciliationReport;
+    }
+    const now = Date.now();
+    if (!force && now < this.nextReconciliationAt) {
+      return this.reconciliationReport;
+    }
+    this.nextReconciliationAt = now + TephrameshPlugin.RECONCILIATION_INTERVAL_MS;
+    this.reconciliationInProgress = true;
+    this.reconciliationReport = {
+      state: "checking",
+      issues: [],
+      repairBlockedReasons: [],
+    };
+    this.settingTab?.refreshReconciliationReport();
+    try {
+      const activeInstances = activeMeshInstances(this.settings.instances);
+      const settled = await Promise.allSettled(
+        activeInstances.map((instance) =>
+          this.inspectInstanceForReconciliation(instance),
+        ),
+      );
+      const snapshots: InstanceReconciliationSnapshot[] = [];
+      const unavailable: ReconciliationIssue[] = [];
+      const invalidPlan: ReconciliationIssue[] = [];
+      try {
+        createMeshPlan(
+          activeInstances,
+          this.settings.folderId,
+          this.settings.folderLabel,
+          this.getShardEncryptionKey() ?? "",
+        );
+      } catch (error) {
+        const instance = activeInstances[0];
+        invalidPlan.push({
+          instanceId: instance?.id ?? "mesh",
+          instanceName: instance?.name ?? "Mesh",
+          message: error instanceof Error ? error.message : String(error),
+          repairable: false,
+        });
+      }
+      for (const [index, result] of settled.entries()) {
+        const instance = activeInstances[index];
+        if (!instance) continue;
+        if (result.status === "fulfilled") {
+          snapshots.push(result.value);
+        } else {
+          unavailable.push({
+            instanceId: instance.id,
+            instanceName: instance.name,
+            message: `Could not inspect the instance: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+            repairable: false,
+          });
+        }
+      }
+      const issues = snapshots.flatMap((snapshot) =>
+        inspectReconciliationSnapshot(
+          snapshot,
+          activeInstances,
+          this.settings.folderId,
+          this.settings.folderLabel,
+          this.getShardEncryptionKey() ?? "",
+        ),
+      );
+      this.reconciliationReport = {
+        state: unavailable.length > 0
+          ? "unavailable"
+          : invalidPlan.length > 0 || issues.length > 0
+            ? "issues"
+            : "healthy",
+        checkedAt: Date.now(),
+        issues: [...unavailable, ...invalidPlan, ...issues],
+        repairBlockedReasons: repairBlockedReasons(snapshots),
+      };
+    } finally {
+      this.reconciliationInProgress = false;
+      this.settingTab?.refreshReconciliationReport();
+    }
+    return this.reconciliationReport;
+  }
+
+  async repairMesh(): Promise<void> {
+    const report = await this.refreshReconciliation(true);
+    if (report.state === "unavailable") {
+      throw new Error("Every active instance must be reachable before repair.");
+    }
+    const unsafe = report.issues.filter((issue) => !issue.repairable);
+    if (unsafe.length > 0) {
+      throw new Error(`Repair is blocked: ${unsafe[0]!.message}`);
+    }
+    if (report.repairBlockedReasons.length > 0) {
+      throw new MeshNotReadyError(report.repairBlockedReasons.join(" "));
+    }
+    if (report.issues.length === 0) return;
+
+    this.reconciliationReport = { ...report, state: "repairing" };
+    this.settingTab?.refreshReconciliationReport();
+    try {
+      const activeInstances = activeMeshInstances(this.settings.instances);
+      const clients = new Map<string, SyncthingClient>();
+      for (const instance of activeInstances) {
+        const apiKey = this.getApiKey(instance.id);
+        if (!apiKey) throw new Error(`API key unavailable for ${instance.name}.`);
+        clients.set(instance.id, new SyncthingClient(instance.endpoint, apiKey));
+      }
+
+      const folderOrder = [
+        ...activeInstances.filter((instance) => instance.kind === "shard"),
+        ...activeInstances.filter((instance) => instance.kind === "device"),
+      ];
+      for (const instance of folderOrder) {
+        const client = clients.get(instance.id)!;
+        const folders = await client.getFolders();
+        const folder = folders.find(
+          (candidate) => candidate.id === this.settings.folderId,
+        );
+        if (!folder) {
+          await client.createFolder(
+            this.settings.folderId,
+            this.settings.folderLabel,
+            instance.folderPath,
+            instance.kind === "shard" ? "receiveencrypted" : "sendreceive",
+          );
+        } else if (folder.label !== this.settings.folderLabel) {
+          await client.updateFolderLabel(
+            this.settings.folderId,
+            this.settings.folderLabel,
+          );
+        }
+      }
+
+      const shardKey = this.getShardEncryptionKey() ?? "";
+      for (const local of activeInstances) {
+        const client = clients.get(local.id)!;
+        for (const peer of activeInstances) {
+          if (peer.id === local.id) continue;
+          const policy = meshPeerPolicy(local, peer, shardKey);
+          await client.ensureDevice(
+            peer.deviceId,
+            peer.name,
+            policy.untrusted,
+          );
+        }
+      }
+      for (const local of folderOrder) {
+        const client = clients.get(local.id)!;
+        for (const peer of activeInstances) {
+          if (peer.id === local.id) continue;
+          const policy = meshPeerPolicy(local, peer, shardKey);
+          await client.ensureFolderPeer(
+            this.settings.folderId,
+            peer.deviceId,
+            policy.encryptionPassword,
+          );
+        }
+        const folder = await client.getFolder(this.settings.folderId);
+        const expectedIds = new Set(
+          activeInstances.map((instance) => instance.deviceId),
+        );
+        for (const folderPeer of folder.devices) {
+          if (!expectedIds.has(folderPeer.deviceID)) {
+            await client.removeFolderPeer(
+              this.settings.folderId,
+              folderPeer.deviceID,
+            );
+          }
+        }
+      }
+
+      const verified = await this.refreshReconciliation(true);
+      if (verified.state !== "healthy") {
+        throw new Error(
+          "Repair was only partially applied. Review the remaining issues and retry.",
+        );
+      }
+    } catch (error) {
+      this.nextReconciliationAt = 0;
+      if (this.reconciliationReport.state === "repairing") {
+        this.reconciliationReport = { ...report, state: "issues" };
+        this.settingTab?.refreshReconciliationReport();
+      }
+      throw error;
     }
   }
 
@@ -581,6 +850,31 @@ export default class TephrameshPlugin extends Plugin {
       setIcon(icon, "refresh-cw");
       title.prepend(icon);
     }
+
+    const pendingFolders = pendingFolderPaths(this.pendingNotePaths);
+    for (const title of Array.from(
+      document.querySelectorAll<HTMLElement>(".nav-folder-title[data-path]"),
+    )) {
+      const path = title.dataset.path?.replaceAll("\\", "/");
+      const existing = title.querySelector(
+        ":scope > .tephramesh-folder-sync-icon",
+      ) as HTMLElement | null;
+      if (!path || !pendingFolders.has(path)) {
+        existing?.remove();
+        title.classList.remove("tephramesh-folder-sync-pending");
+        title.removeAttribute("aria-label");
+        continue;
+      }
+      title.classList.add("tephramesh-folder-sync-pending");
+      title.setAttribute("aria-label", `${path} — contains notes waiting to sync`);
+      if (existing) continue;
+      const icon = title.createSpan({
+        cls: "tephramesh-folder-sync-icon",
+        attr: { "aria-hidden": "true" },
+      });
+      setIcon(icon, "refresh-cw");
+      title.prepend(icon);
+    }
   }
 
   private clearNoteSyncBadges(): void {
@@ -591,6 +885,15 @@ export default class TephrameshPlugin extends Plugin {
     )) {
       title.querySelector(":scope > .tephramesh-note-sync-icon")?.remove();
       title.classList.remove("tephramesh-note-sync-pending");
+      title.removeAttribute("aria-label");
+    }
+    for (const title of Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".nav-folder-title.tephramesh-folder-sync-pending",
+      ),
+    )) {
+      title.querySelector(":scope > .tephramesh-folder-sync-icon")?.remove();
+      title.classList.remove("tephramesh-folder-sync-pending");
       title.removeAttribute("aria-label");
     }
   }
@@ -675,6 +978,7 @@ export default class TephrameshPlugin extends Plugin {
     } finally {
       this.refreshInProgress = false;
       this.settingTab.refreshRuntimeStatuses(this.runtimeStatuses);
+      void this.refreshReconciliation();
     }
   }
 
@@ -714,6 +1018,13 @@ export default class TephrameshPlugin extends Plugin {
                 .catch(() => undefined),
             }
           : initialFolderStatus;
+      const pendingFiles =
+        instance.kind === "device" &&
+        instance.setupState !== "pending" &&
+        (folder?.needFiles ?? 0) > 0
+          ? await client.getLocalNeededFiles(this.settings.folderId)
+              .catch(() => undefined)
+          : undefined;
       if (system.myID !== instance.deviceId) {
         throw new Error("API now reports a different Syncthing device ID");
       }
@@ -749,6 +1060,7 @@ export default class TephrameshPlugin extends Plugin {
         version: version.version,
         deviceId: system.myID,
         folder,
+        pendingFiles,
         traffic,
         ...rates,
       });

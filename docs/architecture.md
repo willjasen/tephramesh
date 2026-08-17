@@ -35,7 +35,7 @@ The plugin never syncs Syncthing's own configuration directory. Doing so could d
 
 ## Reconciliation design
 
-Peer and folder-sharing configuration writes will be implemented as an idempotent reconciler rather than a sequence of invitation dialogs. Initial folder creation is already automated from each Syncthing instance's default-folder template.
+Peer and folder-sharing configuration writes use an idempotent reconciler rather than a sequence of invitation dialogs. Initial folder creation is automated from each Syncthing instance's default-folder template. The Topology tab audits the mesh at startup, approximately every five minutes, and on demand; it previews repairable and blocking issues before enabling repair.
 
 1. Read status, version, devices, folders, pending devices, and pending folders from every reachable instance.
 2. Verify that endpoint identity still matches the recorded Syncthing device ID.
@@ -45,9 +45,12 @@ Peer and folder-sharing configuration writes will be implemented as an idempoten
 6. Create or update the Receive Encrypted folder on shards before trusted devices advertise it.
 7. Update trusted-device folder shares, attaching the password only to shard peers.
 8. Configure shard-to-shard ciphertext sharing.
-9. Re-read each configuration and runtime folder status. Stop on the first failed instance and leave a rerunnable, convergent plan.
+9. Remove unregistered peers from the managed Tephramesh folder while preserving unrelated global Syncthing device and folder configuration.
+10. Re-read each configuration and runtime folder status. Stop on the first failed instance and leave a rerunnable, convergent plan.
 
 There is no cross-instance Syncthing transaction. Tephramesh must therefore avoid rollback-by-deletion; a retry should safely converge partially applied configuration toward the same desired state.
+
+Repair remains disabled while an instance is unreachable, an endpoint reports a different identity, a configured path is owned by another folder, a managed folder has the wrong path or type, or an existing folder is not idle and complete. Syncthing's REST API cannot safely classify arbitrary pre-existing files in an otherwise unconfigured shard path, so first-time shard path safety still relies on the add-instance validation and the operator choosing an empty encrypted-storage location.
 
 ## Topology growth
 

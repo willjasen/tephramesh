@@ -72,6 +72,14 @@ export class SyncthingClient {
     return this.request<SyncthingFolder[]>("/rest/config/folders");
   }
 
+  async getPendingDevices(): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/rest/cluster/pending/devices");
+  }
+
+  async getPendingFolders(): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("/rest/cluster/pending/folders");
+  }
+
   async getDefaultFolder(): Promise<SyncthingFolder> {
     return this.request<SyncthingFolder>("/rest/config/defaults/folder");
   }

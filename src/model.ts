@@ -122,6 +122,7 @@ export interface InstanceRuntimeStatus {
   version?: string;
   deviceId?: string;
   folder?: SyncthingFolderStatus;
+  pendingFiles?: string[];
   traffic?: SyncthingTrafficSample;
   downloadBytesPerSecond?: number;
   uploadBytesPerSecond?: number;
