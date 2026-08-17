@@ -7,7 +7,12 @@ import { localSyncthingDeviceName } from "./syncthing-device";
 import { MeshNotReadyError } from "./mesh-errors";
 import { generateShardPassword, sha256Hex } from "./security";
 import { trafficRates } from "./syncthing-traffic";
-import { activeMeshInstances, createMeshPlan, meshPeerPolicy } from "./topology";
+import {
+  activeMeshInstances,
+  canRemoveInstance,
+  createMeshPlan,
+  meshPeerPolicy,
+} from "./topology";
 import { pendingFolderPaths } from "./note-sync";
 import {
   inspectReconciliationSnapshot,
@@ -683,10 +688,16 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   async removeInstance(instance: MeshInstance): Promise<void> {
+    if (!canRemoveInstance(this.settings.instances, instance)) {
+      throw new Error("The last active device cannot be removed.");
+    }
     const remaining = this.settings.instances.filter(
       (candidate) => candidate.id !== instance.id,
     );
     const remainingActive = activeMeshInstances(remaining);
+    const replacementPrimary = remainingActive.find(
+      (candidate) => candidate.kind === "device",
+    );
     const removedApiKey = this.getApiKey(instance.id);
     if (!removedApiKey) {
       throw new Error(`API key unavailable for ${instance.name}.`);
@@ -716,6 +727,9 @@ export default class TephrameshPlugin extends Plugin {
         });
       if (pendingFolder) await removedClient.removeFolder(this.settings.folderId);
       this.settings.instances = remaining;
+      if (instance.id === this.settings.primaryInstanceId && replacementPrimary) {
+        this.settings.primaryInstanceId = replacementPrimary.id;
+      }
       this.runtimeStatuses.delete(instance.id);
       if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
       delete this.secrets.apiKeys[instance.id];
@@ -734,6 +748,9 @@ export default class TephrameshPlugin extends Plugin {
     await removedClient.removeFolder(this.settings.folderId);
 
     this.settings.instances = remaining;
+    if (instance.id === this.settings.primaryInstanceId && replacementPrimary) {
+      this.settings.primaryInstanceId = replacementPrimary.id;
+    }
     this.runtimeStatuses.delete(instance.id);
     if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
     delete this.secrets.apiKeys[instance.id];

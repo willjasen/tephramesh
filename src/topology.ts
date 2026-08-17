@@ -12,6 +12,16 @@ export function activeMeshInstances(instances: MeshInstance[]): MeshInstance[] {
   return instances.filter((instance) => instance.setupState !== "pending");
 }
 
+export function canRemoveInstance(
+  instances: MeshInstance[],
+  instance: MeshInstance,
+): boolean {
+  if (instance.kind === "shard") return true;
+  return activeMeshInstances(instances).some(
+    (candidate) => candidate.kind === "device" && candidate.id !== instance.id,
+  );
+}
+
 export function isSyncthingSyncState(state: string | undefined): boolean {
   return state === "syncing" || state === "sync-preparing";
 }

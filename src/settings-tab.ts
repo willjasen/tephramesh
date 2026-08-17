@@ -12,6 +12,7 @@ import {
 } from "./security";
 import {
   activeMeshInstances,
+  canRemoveInstance,
   createMeshPlan,
   isSyncthingSyncState,
   meshRuntimeStates,
@@ -410,7 +411,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
           await this.plugin.refreshInstanceStatus(instance);
         }),
       );
-      if (instance.id !== this.plugin.settings.primaryInstanceId) {
+      if (canRemoveInstance(this.plugin.settings.instances, instance)) {
         setting.addButton((button) =>
           button
             .setIcon("trash-2")

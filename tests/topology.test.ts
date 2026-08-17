@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MeshInstance } from "../src/model";
 import {
   activeMeshInstances,
+  canRemoveInstance,
   createMeshPlan,
   isSyncthingSyncState,
   meshPeerPolicy,
@@ -213,5 +214,26 @@ describe("active mesh instances", () => {
       "syncing",
       "pending",
     ]);
+  });
+});
+
+describe("instance removal", () => {
+  it("allows either active device to be removed when another active device remains", () => {
+    expect(canRemoveInstance(instances, instances[0]!)).toBe(true);
+    expect(canRemoveInstance(instances, instances[1]!)).toBe(true);
+  });
+
+  it("never allows the last active device to be removed", () => {
+    expect(canRemoveInstance([instances[0]!, instances[2]!], instances[0]!)).toBe(false);
+  });
+
+  it("does not count a pending device as the remaining active device", () => {
+    const pending = { ...instances[1]!, setupState: "pending" as const };
+    expect(canRemoveInstance([instances[0]!, pending], instances[0]!)).toBe(false);
+    expect(canRemoveInstance([instances[0]!, pending], pending)).toBe(true);
+  });
+
+  it("allows shards to be removed without changing the device invariant", () => {
+    expect(canRemoveInstance([instances[0]!, instances[2]!], instances[2]!)).toBe(true);
   });
 });
