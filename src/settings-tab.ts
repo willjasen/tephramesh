@@ -41,12 +41,30 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private topologyElement?: HTMLElement;
   private reconciliationElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
+  private visible = false;
 
   constructor(app: App, private readonly plugin: TephrameshPlugin) {
     super(app, plugin);
   }
 
   display(): void {
+    if (!this.visible) {
+      this.visible = true;
+      this.plugin.startStatusPolling();
+    }
+    this.render();
+  }
+
+  hide(): void {
+    this.visible = false;
+    this.plugin.stopStatusPolling();
+  }
+
+  rerenderIfVisible(): void {
+    if (this.visible) this.render();
+  }
+
+  private render(): void {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("tephramesh-settings");
@@ -600,11 +618,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       status.createSpan({ cls: "tephramesh-topology-indicator" });
       const statusText = status.createDiv();
-      statusText.createEl("strong", { text: "Plan valid" });
-      statusText.createDiv({
-        cls: "tephramesh-topology-subtitle",
-        text: "The full mesh can be configured with the current settings.",
-      });
+      statusText.createEl("strong", { text: "Healthy" });
       const runtimeGroup = status.createDiv({
         cls: "tephramesh-topology-runtime-group",
       });

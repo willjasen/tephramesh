@@ -57,6 +57,7 @@ export default class TephrameshPlugin extends Plugin {
   private storageFormat: 2 | 3 = 3;
   private settingTab!: TephrameshSettingTab;
   private pollingTimer?: number;
+  private statusPollingEnabled = false;
   private noteSyncTimer?: number;
   private noteSyncRefreshInProgress = false;
   private pendingNotePaths = new Set<string>();
@@ -84,9 +85,7 @@ export default class TephrameshPlugin extends Plugin {
         showTephrameshNotice("success", "Status refreshed");
       },
     });
-    this.restartPolling();
     this.restartNoteSyncPolling();
-    void this.refreshStatuses();
     void this.refreshReconciliation();
   }
 
@@ -105,10 +104,9 @@ export default class TephrameshPlugin extends Plugin {
     this.secrets = undefined;
     await this.loadSettings();
     await this.tryUnlockStoredIdentity();
-    this.restartPolling();
     this.restartNoteSyncPolling();
-    this.settingTab.display();
-    void this.refreshStatuses(true);
+    this.settingTab.rerenderIfVisible();
+    if (this.statusPollingEnabled) void this.refreshStatuses(true);
     void this.refreshReconciliation(true);
   }
 
@@ -258,7 +256,7 @@ export default class TephrameshPlugin extends Plugin {
     const keys = await validateAgeKeyPair(this.settings.ageRecipient, identity);
     await this.decryptStoredData(keys.identity);
     this.app.secretStorage.setSecret(AGE_IDENTITY_SECRET_NAME, keys.identity);
-    void this.refreshStatuses(true);
+    if (this.statusPollingEnabled) void this.refreshStatuses(true);
   }
 
   async setApiKey(instanceId: string, apiKey: string): Promise<void> {
@@ -743,9 +741,28 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   restartPolling(): void {
-    if (this.pollingTimer !== undefined) window.clearInterval(this.pollingTimer);
+    if (this.pollingTimer !== undefined) {
+      window.clearInterval(this.pollingTimer);
+      this.pollingTimer = undefined;
+    }
+    if (!this.statusPollingEnabled) return;
     const milliseconds = Math.max(1, this.settings.pollIntervalSeconds) * 1000;
     this.pollingTimer = window.setInterval(() => void this.refreshStatuses(), milliseconds);
+  }
+
+  startStatusPolling(): void {
+    if (this.statusPollingEnabled) return;
+    this.statusPollingEnabled = true;
+    this.restartPolling();
+    void this.refreshStatuses(true);
+  }
+
+  stopStatusPolling(): void {
+    this.statusPollingEnabled = false;
+    if (this.pollingTimer !== undefined) {
+      window.clearInterval(this.pollingTimer);
+      this.pollingTimer = undefined;
+    }
   }
 
   restartNoteSyncPolling(): void {
@@ -973,7 +990,7 @@ export default class TephrameshPlugin extends Plugin {
       );
       if (nameChanges.some(Boolean)) {
         await this.saveSettings();
-        this.settingTab.display();
+        this.settingTab.rerenderIfVisible();
       }
     } finally {
       this.refreshInProgress = false;
@@ -1074,7 +1091,7 @@ export default class TephrameshPlugin extends Plugin {
     if (render) {
       if (nameChanged) {
         await this.saveSettings();
-        this.settingTab.display();
+        this.settingTab.rerenderIfVisible();
       }
       this.settingTab.refreshRuntimeStatuses(this.runtimeStatuses);
     }
