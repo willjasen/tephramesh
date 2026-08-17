@@ -406,11 +406,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
           }).open();
         }),
       );
-      setting.addButton((button) =>
-        button.setIcon("refresh-cw").setTooltip("Refresh status").onClick(async () => {
-          await this.plugin.refreshInstanceStatus(instance);
-        }),
-      );
       if (canRemoveInstance(this.plugin.settings.instances, instance)) {
         setting.addButton((button) =>
           button
