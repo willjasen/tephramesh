@@ -1,4 +1,4 @@
-import { Plugin } from "obsidian";
+import { Plugin, setIcon } from "obsidian";
 import { DEFAULT_SETTINGS, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings } from "./model";
 import { TephrameshSettingTab } from "./settings-tab";
 import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
@@ -44,6 +44,10 @@ export default class TephrameshPlugin extends Plugin {
   private storageFormat: 2 | 3 = 3;
   private settingTab!: TephrameshSettingTab;
   private pollingTimer?: number;
+  private noteSyncTimer?: number;
+  private noteSyncRefreshInProgress = false;
+  private pendingNotePaths = new Set<string>();
+  private fileExplorerObserver?: MutationObserver;
   private refreshInProgress = false;
   private nextNameRefreshAt = 0;
   private folderLabelSyncTimer?: number;
@@ -65,12 +69,16 @@ export default class TephrameshPlugin extends Plugin {
       },
     });
     this.restartPolling();
+    this.restartNoteSyncPolling();
     void this.refreshStatuses();
   }
 
   onunload(): void {
     this.secrets = undefined;
     if (this.pollingTimer !== undefined) window.clearInterval(this.pollingTimer);
+    if (this.noteSyncTimer !== undefined) window.clearInterval(this.noteSyncTimer);
+    this.fileExplorerObserver?.disconnect();
+    this.clearNoteSyncBadges();
     if (this.folderLabelSyncTimer !== undefined) {
       window.clearTimeout(this.folderLabelSyncTimer);
     }
@@ -81,6 +89,7 @@ export default class TephrameshPlugin extends Plugin {
     await this.loadSettings();
     await this.tryUnlockStoredIdentity();
     this.restartPolling();
+    this.restartNoteSyncPolling();
     this.settingTab.display();
     void this.refreshStatuses(true);
   }
@@ -468,6 +477,122 @@ export default class TephrameshPlugin extends Plugin {
     if (this.pollingTimer !== undefined) window.clearInterval(this.pollingTimer);
     const milliseconds = Math.max(1, this.settings.pollIntervalSeconds) * 1000;
     this.pollingTimer = window.setInterval(() => void this.refreshStatuses(), milliseconds);
+  }
+
+  restartNoteSyncPolling(): void {
+    if (this.noteSyncTimer !== undefined) window.clearInterval(this.noteSyncTimer);
+    this.fileExplorerObserver?.disconnect();
+    this.fileExplorerObserver = new MutationObserver(() => {
+      this.renderNoteSyncBadges();
+    });
+    this.fileExplorerObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+    this.noteSyncTimer = window.setInterval(
+      () => void this.refreshNoteSyncBadges(),
+      Math.max(1, this.settings.noteSyncPollIntervalSeconds) * 1000,
+    );
+    void this.refreshNoteSyncBadges();
+  }
+
+  private async refreshNoteSyncBadges(): Promise<void> {
+    if (this.noteSyncRefreshInProgress) return;
+    if (
+      !this.settings.onboardingComplete ||
+      !this.secretsAreUnlocked() ||
+      !this.settings.folderId
+    ) {
+      this.pendingNotePaths.clear();
+      this.renderNoteSyncBadges();
+      return;
+    }
+
+    const activeInstances = activeMeshInstances(this.settings.instances);
+    if (activeInstances.length < 2) {
+      this.pendingNotePaths.clear();
+      this.renderNoteSyncBadges();
+      return;
+    }
+
+    const primary = activeInstances.find(
+      (instance) => instance.id === this.settings.primaryInstanceId,
+    );
+    const sources = [
+      ...(primary ? [primary] : []),
+      ...activeInstances.filter(
+        (instance) => instance.id !== primary?.id && instance.kind === "device",
+      ),
+    ].filter((instance) => instance.kind === "device");
+
+    this.noteSyncRefreshInProgress = true;
+    try {
+      for (const source of sources) {
+        const apiKey = this.getApiKey(source.id);
+        if (!apiKey) continue;
+        try {
+          const client = new SyncthingClient(source.endpoint, apiKey);
+          const neededByPeer = await Promise.all([
+            client.getLocalNeededFiles(this.settings.folderId),
+            ...activeInstances
+              .filter((peer) => peer.id !== source.id)
+              .map((peer) =>
+                client.getRemoteNeededFiles(this.settings.folderId, peer.deviceId),
+              ),
+          ]);
+          this.pendingNotePaths = new Set(
+            neededByPeer
+              .flat()
+              .map((path) => path.replaceAll("\\", "/"))
+              .filter((path) => path.toLowerCase().endsWith(".md")),
+          );
+          this.renderNoteSyncBadges();
+          return;
+        } catch {
+          // Try another active instance without clearing the last known badges.
+        }
+      }
+    } finally {
+      this.noteSyncRefreshInProgress = false;
+    }
+  }
+
+  private renderNoteSyncBadges(): void {
+    for (const title of Array.from(
+      document.querySelectorAll<HTMLElement>(".nav-file-title[data-path]"),
+    )) {
+      const path = title.dataset.path?.replaceAll("\\", "/");
+      const existing = title.querySelector(
+        ":scope > .tephramesh-note-sync-icon",
+      ) as HTMLElement | null;
+      if (!path || !this.pendingNotePaths.has(path)) {
+        existing?.remove();
+        title.classList.remove("tephramesh-note-sync-pending");
+        title.removeAttribute("aria-label");
+        continue;
+      }
+      title.classList.add("tephramesh-note-sync-pending");
+      title.setAttribute("aria-label", `${path} — waiting to sync`);
+      if (existing) continue;
+      const icon = title.createSpan({
+        cls: "tephramesh-note-sync-icon",
+        attr: { "aria-hidden": "true" },
+      });
+      setIcon(icon, "refresh-cw");
+      title.prepend(icon);
+    }
+  }
+
+  private clearNoteSyncBadges(): void {
+    for (const title of Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".nav-file-title.tephramesh-note-sync-pending",
+      ),
+    )) {
+      title.querySelector(":scope > .tephramesh-note-sync-icon")?.remove();
+      title.classList.remove("tephramesh-note-sync-pending");
+      title.removeAttribute("aria-label");
+    }
   }
 
   scheduleFolderLabelSync(): void {

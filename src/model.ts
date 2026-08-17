@@ -27,6 +27,7 @@ export interface TephrameshSettings {
   folderLabel: string;
   shardEncryptionKeyHash: string;
   pollIntervalSeconds: number;
+  noteSyncPollIntervalSeconds: number;
   instances: MeshInstance[];
 }
 
@@ -96,6 +97,24 @@ export interface SyncthingFolderScanProgressEvent {
   };
 }
 
+export interface SyncthingNeededFile {
+  name: string;
+}
+
+export interface SyncthingRemoteNeed {
+  files: SyncthingNeededFile[];
+  page: number;
+  perpage: number;
+}
+
+export interface SyncthingLocalNeed {
+  progress: SyncthingNeededFile[];
+  queued: SyncthingNeededFile[];
+  rest: SyncthingNeededFile[];
+  page: number;
+  perpage: number;
+}
+
 export interface InstanceRuntimeStatus {
   checkedAt: number;
   ok: boolean;
@@ -130,5 +149,6 @@ export const DEFAULT_SETTINGS: TephrameshSettings = {
   folderLabel: "Obsidian vault",
   shardEncryptionKeyHash: "",
   pollIntervalSeconds: 1,
+  noteSyncPollIntervalSeconds: 5,
   instances: [],
 };

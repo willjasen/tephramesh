@@ -260,3 +260,19 @@ button.tephramesh-pending-button {
 .tephramesh-notice-message {
   color: var(--text-normal);
 }
+
+.nav-file-title > .tephramesh-note-sync-icon {
+  align-items: center;
+  color: var(--color-blue, #59c2ff);
+  display: inline-flex;
+  flex: 0 0 18px;
+  height: 18px;
+  margin-right: var(--size-4-1);
+  width: 18px;
+}
+
+.nav-file-title > .tephramesh-note-sync-icon > svg {
+  height: 18px;
+  stroke-width: 2.25;
+  width: 18px;
+}

@@ -5,6 +5,8 @@ import type {
   SyncthingFolder,
   SyncthingFolderScanProgressEvent,
   SyncthingFolderStatus,
+  SyncthingLocalNeed,
+  SyncthingRemoteNeed,
   SyncthingConnections,
   SyncthingSystemStatus,
   SyncthingVersion,
@@ -235,6 +237,38 @@ export class SyncthingClient {
     return this.request<SyncthingFolderStatus>(
       `/rest/db/status?folder=${encodeURIComponent(folderId)}`,
     );
+  }
+
+  async getRemoteNeededFiles(
+    folderId: string,
+    deviceId: string,
+  ): Promise<string[]> {
+    const perPage = 1000;
+    const names: string[] = [];
+    for (let page = 1; ; page += 1) {
+      const response = await this.request<SyncthingRemoteNeed>(
+        `/rest/db/remoteneed?folder=${encodeURIComponent(folderId)}&device=${encodeURIComponent(deviceId)}&page=${page}&perpage=${perPage}`,
+      );
+      names.push(...response.files.map((file) => file.name));
+      if (response.files.length < perPage) return names;
+    }
+  }
+
+  async getLocalNeededFiles(folderId: string): Promise<string[]> {
+    const perPage = 1000;
+    const names: string[] = [];
+    for (let page = 1; ; page += 1) {
+      const response = await this.request<SyncthingLocalNeed>(
+        `/rest/db/need?folder=${encodeURIComponent(folderId)}&page=${page}&perpage=${perPage}`,
+      );
+      const files = [
+        ...response.progress,
+        ...response.queued,
+        ...response.rest,
+      ];
+      names.push(...files.map((file) => file.name));
+      if (files.length < perPage) return names;
+    }
   }
 
   async getFolderScanProgress(

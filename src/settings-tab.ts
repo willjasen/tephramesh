@@ -253,6 +253,23 @@ export class TephrameshSettingTab extends PluginSettingTab {
             this.plugin.restartPolling();
           }),
       );
+    new Setting(container)
+      .setName("Note sync icon refresh interval")
+      .setDesc("Seconds between checks for notes that active mesh instances still need.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("1", "1 second")
+          .addOption("5", "5 seconds")
+          .addOption("10", "10 seconds")
+          .addOption("30", "30 seconds")
+          .addOption("60", "1 minute")
+          .setValue(String(this.plugin.settings.noteSyncPollIntervalSeconds))
+          .onChange(async (value) => {
+            this.plugin.settings.noteSyncPollIntervalSeconds = Number(value);
+            await this.plugin.saveSettings();
+            this.plugin.restartNoteSyncPolling();
+          }),
+      );
   }
 
   private renderInstances(container: HTMLElement): void {
