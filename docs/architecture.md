@@ -7,11 +7,11 @@ Tephramesh manages one Syncthing folder ID per Obsidian vault.
 | Local instance | Remote instance | Remote marked untrusted | Folder password on share | Local folder type |
 | --- | --- | --- | --- | --- |
 | Device | Device | No | Empty | Send & Receive |
-| Device | Shard | Yes | Shard encryption key | Send & Receive |
+| Device | Shard | No | Shard encryption key | Send & Receive |
 | Shard | Device | No | Empty | Receive Encrypted |
 | Shard | Shard | No | Empty | Receive Encrypted |
 
-The shard encryption key belongs only on trusted devices. A shard stores and exchanges the encrypted representation without learning the key. Marking a shard as untrusted from each device is an additional Syncthing guardrail: it prevents that device from accidentally sharing plaintext with the shard.
+The shard encryption key belongs only on devices. A shard stores and exchanges the encrypted representation without learning the key. Tephramesh keeps every Syncthing device record trusted, including shard records, while attaching the shard encryption key only to device-to-shard folder shares.
 
 API keys are administrative credentials. Tephramesh stores its entire operational state and secrets in one versioned age-encrypted payload. New configurations generate a dedicated hybrid ML-KEM-768 + X25519 age identity locally; classic and post-quantum native age identities can also be imported. The plaintext envelope contains only `schemaVersion`, the public recipient, and Base64 ciphertext. Each Obsidian installation stores the matching private identity locally in Keychain under `tephramesh-age-identity`. A copied `data.json` reveals neither topology nor API access without that identity.
 

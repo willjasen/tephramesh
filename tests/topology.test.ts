@@ -66,11 +66,11 @@ describe("mesh planner", () => {
     expect(shard?.folder.devices.every((item) => item.encryptionPassword === "")).toBe(true);
   });
 
-  it("marks shards untrusted only from a trusted device's perspective", () => {
+  it("keeps shard device records trusted in both directions", () => {
     const plan = createMeshPlan(instances, "vault-id", "My vault", password);
     const laptop = plan.instances.find((item) => item.instanceId === "laptop");
     const shard = plan.instances.find((item) => item.instanceId === "shard");
-    expect(laptop?.devices.find((item) => item.deviceID === "SHARD-ID")?.untrusted).toBe(true);
+    expect(laptop?.devices.find((item) => item.deviceID === "SHARD-ID")?.untrusted).toBe(false);
     expect(shard?.devices.find((item) => item.deviceID === "LAPTOP-ID")?.untrusted).toBe(false);
   });
 

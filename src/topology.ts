@@ -69,7 +69,7 @@ export function meshPeerPolicy(
 ): MeshPeerPolicy {
   const trustedDeviceToShard = local.kind === "device" && remote.kind === "shard";
   return {
-    untrusted: trustedDeviceToShard,
+    untrusted: false,
     encryptionPassword: trustedDeviceToShard ? shardKey : "",
   };
 }
