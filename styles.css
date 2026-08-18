@@ -143,6 +143,20 @@ button.tephramesh-pending-button {
   padding: var(--size-4-4);
 }
 
+.tephramesh-topology-section + .tephramesh-topology-section {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: var(--size-4-5);
+  padding-top: var(--size-4-4);
+}
+
+.tephramesh-topology-section h3 {
+  margin: 0;
+}
+
+.tephramesh-topology-operating .tephramesh-topology-metrics {
+  margin-top: var(--size-4-3);
+}
+
 .tephramesh-topology-status {
   align-items: flex-start;
   display: flex;

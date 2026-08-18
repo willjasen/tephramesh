@@ -668,21 +668,30 @@ export class TephrameshSettingTab extends PluginSettingTab {
         this.plugin.getShardEncryptionKey() ?? "",
       );
       const activeInstances = activeMeshInstances(this.plugin.settings.instances);
-      const devices = activeInstances.filter((item) => item.kind === "device").length;
-      const shards = activeInstances.length - devices;
-      const activeCount = activeInstances.length;
-      const activeConnections = (activeCount * (activeCount - 1)) / 2;
-      const reportedGlobalFiles = this.plugin.settings.instances.flatMap(
-        (instance) => {
-          const count = this.plugin.runtimeStatuses.get(instance.id)?.folder?.globalFiles;
-          return typeof count === "number" && Number.isFinite(count) ? [count] : [];
-        },
+      const operatingInstances = activeInstances.filter(
+        (instance) => this.plugin.runtimeStatuses.get(instance.id)?.ok,
       );
-      const globalFiles =
-        reportedGlobalFiles.length > 0 ? Math.max(...reportedGlobalFiles) : undefined;
+      const metricsFor = (instances: MeshInstance[]) => {
+        const devices = instances.filter((item) => item.kind === "device").length;
+        const count = instances.length;
+        const reportedGlobalFiles = instances.flatMap((instance) => {
+          const value = this.plugin.runtimeStatuses.get(instance.id)?.folder?.globalFiles;
+          return typeof value === "number" && Number.isFinite(value) ? [value] : [];
+        });
+        return {
+          devices,
+          shards: count - devices,
+          connections: (count * (count - 1)) / 2,
+          globalFiles: reportedGlobalFiles.length > 0 ? Math.max(...reportedGlobalFiles) : undefined,
+        };
+      };
+      const configured = metricsFor(activeInstances);
+      const operating = metricsFor(operatingInstances);
       this.topologyElement.addClass("is-valid");
 
-      const status = this.topologyElement.createDiv({
+      const configuredSection = this.topologyElement.createDiv({ cls: "tephramesh-topology-section" });
+      configuredSection.createEl("h3", { text: "Configured" });
+      const status = configuredSection.createDiv({
         cls: "tephramesh-topology-status",
       });
       status.createSpan({ cls: "tephramesh-topology-indicator" });
@@ -701,16 +710,35 @@ export class TephrameshSettingTab extends PluginSettingTab {
         });
       }
 
-      const metrics = this.topologyElement.createDiv({
+      const metrics = configuredSection.createDiv({
         cls: "tephramesh-topology-metrics",
       });
       for (const [label, value] of [
-        [devices === 1 ? "Device" : "Devices", devices],
-        [shards === 1 ? "Shard" : "Shards", shards],
-        [activeConnections === 1 ? "Connection" : "Connections", activeConnections],
-        ["Global files", globalFiles ?? "—"],
+        [configured.devices === 1 ? "Device" : "Devices", configured.devices],
+        [configured.shards === 1 ? "Shard" : "Shards", configured.shards],
+        [configured.connections === 1 ? "Connection" : "Connections", configured.connections],
       ] as const) {
         const metric = metrics.createDiv({ cls: "tephramesh-topology-metric" });
+        metric.createEl("strong", { text: String(value) });
+        metric.createSpan({ text: label });
+      }
+
+      const operatingSection = this.topologyElement.createDiv({ cls: "tephramesh-topology-section tephramesh-topology-operating" });
+      operatingSection.createEl("h3", { text: "Operating now" });
+      operatingSection.createDiv({
+        cls: "tephramesh-topology-subtitle",
+        text: operatingInstances.length === activeInstances.length
+          ? "Reachable instances currently participating in the mesh."
+          : `${activeInstances.length - operatingInstances.length} configured instance${activeInstances.length - operatingInstances.length === 1 ? " is" : "s are"} offline or unavailable.`,
+      });
+      const operatingMetrics = operatingSection.createDiv({ cls: "tephramesh-topology-metrics" });
+      for (const [label, value] of [
+        [operating.devices === 1 ? "Device" : "Devices", operating.devices],
+        [operating.shards === 1 ? "Shard" : "Shards", operating.shards],
+        [operating.connections === 1 ? "Connection" : "Connections", operating.connections],
+        ["Global files", operating.globalFiles ?? "—"],
+      ] as const) {
+        const metric = operatingMetrics.createDiv({ cls: "tephramesh-topology-metric" });
         metric.createEl("strong", { text: String(value) });
         metric.createSpan({ text: label });
       }
