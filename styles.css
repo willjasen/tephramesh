@@ -79,6 +79,13 @@
   background: var(--color-orange);
   color: var(--text-on-accent);
 }
+.tephramesh-instance-kind.is-known {
+  background: var(--color-yellow);
+  color: #1f1f1f;
+}
+.tephramesh-known-button {
+  margin-left: 0.5em;
+}
 
 .setting-item-description a.tephramesh-instance-url,
 .setting-item-description a.tephramesh-instance-url:visited {

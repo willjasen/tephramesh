@@ -1,5 +1,5 @@
 import { normalizePath, Plugin, setIcon } from "obsidian";
-import { DEFAULT_SETTINGS, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings } from "./model";
+import { DEFAULT_SETTINGS, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings, type KnownDevice } from "./model";
 import { TephrameshSettingTab } from "./settings-tab";
 import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
 import { showTephrameshNotice } from "./notices";
@@ -520,6 +520,7 @@ export default class TephrameshPlugin extends Plugin {
           this.settings.folderId,
           this.settings.folderLabel,
           this.getShardEncryptionKey() ?? "",
+          this.settings.knownDevices,
         ),
       );
       this.reconciliationReport = {
@@ -617,8 +618,10 @@ export default class TephrameshPlugin extends Plugin {
         const expectedIds = new Set(
           activeInstances.map((instance) => instance.deviceId),
         );
+        const knownIds = new Set(this.settings.knownDevices.map((known) => known.deviceId));
         for (const folderPeer of folder.devices) {
           if (!expectedIds.has(folderPeer.deviceID)) {
+            if (knownIds.has(folderPeer.deviceID)) continue;
             await client.removeFolderPeer(
               this.settings.folderId,
               folderPeer.deviceID,
@@ -641,6 +644,19 @@ export default class TephrameshPlugin extends Plugin {
       }
       throw error;
     }
+  }
+
+  async addKnownDevice(deviceId: string, name: string): Promise<void> {
+    const existing = this.settings.knownDevices.find((known) => known.deviceId === deviceId);
+    if (existing) {
+      existing.name = name || existing.name;
+    } else {
+      const known: KnownDevice = { deviceId, name: name || "Known device" };
+      this.settings.knownDevices.push(known);
+    }
+    await this.saveSettings();
+    await this.refreshReconciliation(true);
+    this.settingTab?.rerenderIfVisible();
   }
 
   async completePendingInstance(candidate: MeshInstance): Promise<void> {

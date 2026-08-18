@@ -164,7 +164,7 @@ describe("mesh reconciliation inspection", () => {
       ),
     ).toContainEqual(
       expect.objectContaining({
-        message: "The managed folder is shared with unregistered device UNKNOWN-ID.",
+        message: "The managed folder is shared with unregistered device Unknown device · UNKNOWN.",
         repairable: true,
       }),
     );

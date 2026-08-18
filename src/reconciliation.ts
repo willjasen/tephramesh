@@ -3,8 +3,10 @@ import type {
   SyncthingDevice,
   SyncthingFolder,
   SyncthingFolderStatus,
+  KnownDevice,
 } from "./model";
 import { meshPeerPolicy } from "./topology";
+import { shortDeviceId } from "./security";
 
 export type ReconciliationState =
   | "checking"
@@ -18,6 +20,8 @@ export interface ReconciliationIssue {
   instanceName: string;
   message: string;
   repairable: boolean;
+  deviceId?: string;
+  deviceName?: string;
 }
 
 export interface ReconciliationReport {
@@ -60,6 +64,7 @@ export function inspectReconciliationSnapshot(
   folderId: string,
   folderLabel: string,
   shardEncryptionKey: string,
+  knownDevices: KnownDevice[] = [],
 ): ReconciliationIssue[] {
   const { instance } = snapshot;
   const issues: ReconciliationIssue[] = [];
@@ -156,14 +161,20 @@ export function inspectReconciliationSnapshot(
     const expectedDeviceIds = new Set(
       activeInstances.map((candidate) => candidate.deviceId),
     );
+    const knownById = new Map(knownDevices.map((known) => [known.deviceId, known]));
     for (const folderPeer of folder.devices) {
       if (!expectedDeviceIds.has(folderPeer.deviceID)) {
+        const known = knownById.get(folderPeer.deviceID);
+        if (known) continue;
+        const deviceName = snapshot.devices.find(
+          (device) => device.deviceID === folderPeer.deviceID,
+        )?.name.trim() || "Unknown device";
         issues.push(
-          issue(
+          { ...issue(
             snapshot,
-            `The managed folder is shared with unregistered device ${folderPeer.deviceID}.`,
+            `The managed folder is shared with unregistered device ${deviceName} · ${shortDeviceId(folderPeer.deviceID)}.`,
             true,
-          ),
+          ), deviceId: folderPeer.deviceID, deviceName },
         );
       }
     }

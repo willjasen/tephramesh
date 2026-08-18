@@ -486,6 +486,15 @@ export class TephrameshSettingTab extends PluginSettingTab {
         );
       }
     }
+    for (const known of this.plugin.settings.knownDevices) {
+      const setting = new Setting(container);
+      setting.settingEl.addClass("tephramesh-instance-card");
+      setting.nameEl.empty();
+      setting.nameEl.createSpan({ text: "Known", cls: "tephramesh-instance-kind is-known" });
+      setting.nameEl.appendText(` ${known.name}`);
+      setting.nameEl.createSpan({ text: ` · ${shortDeviceId(known.deviceId)}`, cls: "tephramesh-instance-heading-meta" });
+      setting.descEl.setText("A trusted Syncthing peer outside the Tephramesh mesh.");
+    }
   }
 
   private openInstanceModal(kind: InstanceKind): void {
@@ -621,10 +630,17 @@ export class TephrameshSettingTab extends PluginSettingTab {
         cls: "tephramesh-reconciliation-issues",
       });
       for (const currentIssue of report.issues) {
-        list.createEl("li", {
+        const item = list.createEl("li", {
           text: `${currentIssue.instanceName}: ${currentIssue.message}`,
           cls: currentIssue.repairable ? "is-repairable" : "is-blocking",
         });
+        if (currentIssue.deviceId) {
+          const button = item.createEl("button", { text: "Add as Known", cls: "tephramesh-known-button" });
+          button.addEventListener("click", async () => {
+            button.disabled = true;
+            await this.plugin.addKnownDevice(currentIssue.deviceId!, currentIssue.deviceName ?? "Known device");
+          });
+        }
       }
     }
     if (report.repairBlockedReasons.length > 0) {

@@ -1,4 +1,8 @@
 export type InstanceKind = "device" | "shard";
+export interface KnownDevice {
+  deviceId: string;
+  name: string;
+}
 export type Protocol = "http" | "https";
 
 export interface Endpoint {
@@ -29,6 +33,7 @@ export interface TephrameshSettings {
   pollIntervalSeconds: number;
   noteSyncPollIntervalSeconds: number;
   instances: MeshInstance[];
+  knownDevices: KnownDevice[];
 }
 
 export interface SyncthingSystemStatus {
@@ -153,4 +158,5 @@ export const DEFAULT_SETTINGS: TephrameshSettings = {
   pollIntervalSeconds: 1,
   noteSyncPollIntervalSeconds: 5,
   instances: [],
+  knownDevices: [],
 };
