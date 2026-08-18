@@ -210,6 +210,14 @@ export default class TephrameshPlugin extends Plugin {
     return this.secrets?.shardEncryptionKey || null;
   }
 
+  getDecryptedConfig(): { settings: TephrameshSettings; secrets: TephrameshSecrets } | null {
+    if (!this.secrets) return null;
+    return {
+      settings: structuredClone(this.settings),
+      secrets: structuredClone(this.secrets),
+    };
+  }
+
   async configureEncryption(recipient: string, identity: string): Promise<void> {
     const keys = await validateAgeKeyPair(recipient, identity);
     const migrated = emptySecrets();

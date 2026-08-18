@@ -30,7 +30,7 @@ Tephramesh is an Obsidian plugin that manages a dedicated Syncthing mesh for exa
 
 ## Current behavior
 
-- Settings use tabs: **Topology** first and selected by default, then **Instances** and **Vault**. There is no Shards tab or shard-key display: the key is generated automatically during age setup, remains hidden in encrypted configuration, and shard management stays in Instances.
+- Settings use tabs: **Topology** first and selected by default, then **Instances**, **Vault**, and **Config**. The Config tab is a read-only, visibly styled code-block view of the unlocked decrypted plugin configuration and includes its secrets; the private age identity remains excluded because it is stored only in the local Obsidian Keychain. There is no Shards tab or shard-key display: the key is generated automatically during age setup, remains hidden in the normal settings UI, and shard management stays in Instances.
 - Initial setup asks for the API key, not a device name. Tephramesh discovers the local name by matching `/rest/system/status` `myID` to `/rest/config/devices`.
 - Device and shard setup puts a complete Syncthing URL first. Parsing it must populate and visibly synchronize protocol, hostname, effective port (80/443 when omitted), and normalized reverse-proxy path. Component edits update the full URL. Reject credentials, query strings, fragments, unsupported schemes, and invalid URLs. `endpointUrl()` must include the path so both REST requests and clickable instance links work behind a subpath proxy.
 - Device names remain Syncthing-authoritative. Refresh them from reachable instances approximately every five minutes and persist external changes.

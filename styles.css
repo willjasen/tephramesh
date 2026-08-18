@@ -333,3 +333,25 @@ button.tephramesh-pending-button {
   color: var(--text-warning);
   margin: 0 0 var(--size-4-3);
 }
+
+.tephramesh-config-json {
+  background: var(--code-background, var(--background-secondary));
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--code-normal, var(--text-normal));
+  font-family: var(--font-monospace);
+  font-size: var(--font-small);
+  line-height: var(--line-height-normal);
+  margin: var(--size-4-4) 0;
+  max-width: 100%;
+  overflow: auto;
+  padding: var(--size-4-3);
+  white-space: pre;
+}
+
+.tephramesh-config-json code {
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+}

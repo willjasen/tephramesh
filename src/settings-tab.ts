@@ -29,12 +29,13 @@ import { EditEndpointModal } from "./edit-endpoint-modal";
 import { MeshNotReadyError } from "./mesh-errors";
 import { DeleteConfigModal } from "./delete-config-modal";
 
-type SettingsSection = "instances" | "vault" | "topology";
+type SettingsSection = "instances" | "vault" | "config" | "topology";
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "topology", label: "Topology" },
   { id: "instances", label: "Instances" },
   { id: "vault", label: "Vault" },
+  { id: "config", label: "Config" },
 ];
 
 export class TephrameshSettingTab extends PluginSettingTab {
@@ -243,6 +244,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
       case "vault":
         this.renderMesh(sectionContainer);
         break;
+      case "config":
+        this.renderConfig(sectionContainer);
+        break;
       case "topology":
         this.renderTopology(sectionContainer);
         break;
@@ -318,6 +322,21 @@ export class TephrameshSettingTab extends PluginSettingTab {
           }).open();
         }),
       );
+  }
+
+  private renderConfig(container: HTMLElement): void {
+    container.createEl("h2", { text: "Decrypted plugin config" });
+    container.createEl("p", {
+      text: "Read-only view of the currently unlocked configuration. It includes API keys and the shard encryption key; keep this screen private.",
+      cls: "tephramesh-config-warning",
+    });
+    const config = this.plugin.getDecryptedConfig();
+    if (!config) {
+      container.createEl("p", { text: "Unlock Tephramesh to view the decrypted configuration." });
+      return;
+    }
+    const pre = container.createEl("pre", { cls: "tephramesh-config-json" });
+    pre.createEl("code").setText(JSON.stringify(config, null, 2));
   }
 
   private renderInstances(container: HTMLElement): void {
