@@ -1,12 +1,12 @@
 # Tephramesh
 
-tephramesh is an obsidian plugin for monitoring and configuring a dedicated syncthing mesh for a single obsidian vault.
+[tephramesh](https://github.com/willjasen/tephramesh) is an obsidian plugin for monitoring and configuring a dedicated [syncthing](https://syncthing.net/) mesh for a single [obsidian](https://obsidian.md/) vault.
 
 # Overview
 
 tephramesh connects to each syncthing instance via its url/api.
 
-the entire configuration of tephramesh is post-quantumly encrypted (because syncthing api keys are stored). upon the first setup, an age identity is created and stored in only that obsidian's keychain. the age identity is a private key that needs to be stored and should be treated as such, and it is required one time upon each subsequent setup of tephramesh within an obsidian app.
+the entire configuration of tephramesh is post-quantumly encrypted (because syncthing api keys are stored). upon the first setup, an [age](https://github.com/filosottile/age) identity is created and stored in only that obsidian's keychain. the age identity is a private key that needs to be stored and should be treated as such, and it is required one time upon each subsequent setup of tephramesh within an obsidian app.
 
 to begin, configure a syncthing host. the first host must be available through localhost! tephramesh will connect to it and create an unshared folder in syncthing.
 
