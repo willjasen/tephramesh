@@ -22,8 +22,10 @@ tephramesh handles sharing and accepting the vault folder between syncthing devi
 tephramesh can currently be installed using brat, an obsidian plugin manager.
 
 below is a screenshot of a topology screen, showing two devices and two shards currently online:
-<img width="645" height="454" alt="Screenshot 2026-08-17 at 6 49 00 PM" src="https://github.com/user-attachments/assets/c118477d-3097-4f1a-8dc7-39f77dc310dc" />
+<img width="642" height="645" alt="Screenshot 2026-08-24 at 9 06 32 AM" src="https://github.com/user-attachments/assets/d08a24fb-d867-40ab-b0f0-28407d664fd7" />
 
+and here is a screenshot of the vault tab:
+<img width="636" height="579" alt="Screenshot 2026-08-24 at 9 06 44 AM" src="https://github.com/user-attachments/assets/e32cd9c4-2481-4299-9aa6-c74543f48bb5" />
 
 # Comments
 
