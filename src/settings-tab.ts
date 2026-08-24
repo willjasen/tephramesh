@@ -273,6 +273,29 @@ export class TephrameshSettingTab extends PluginSettingTab {
         }),
       );
     new Setting(container)
+      .setName("Global ignore rules")
+      .setDesc("Default Syncthing ignore patterns for folders created on every mesh instance. One pattern per line.")
+      .addTextArea((text) => text
+        .setValue(this.plugin.settings.globalIgnoreRules.join("\n"))
+        .onChange(async (value) => {
+          const lines = value.split(/\r?\n/);
+          this.plugin.settings.globalIgnoreRules = lines;
+          await this.plugin.updateGlobalIgnoreRules(lines);
+        }));
+    new Setting(container)
+      .setName("Pull order")
+      .setDesc("How Syncthing chooses which needed files to download first.")
+      .addDropdown((dropdown) => dropdown
+        .addOption("random", "Random")
+        .addOption("alphabetic", "Alphabetical")
+        .addOption("smallestFirst", "Smallest first")
+        .addOption("largestFirst", "Largest first")
+        .addOption("oldestFirst", "Oldest first")
+        .addOption("shuffle", "Shuffle")
+        .setValue(this.plugin.settings.pullOrder)
+        .onChange(async (value) => { await this.plugin.updatePullOrder(value); }),
+      );
+    new Setting(container)
       .setName("Status refresh interval")
       .setDesc("Seconds between Syncthing status checks.")
       .addDropdown((dropdown) =>

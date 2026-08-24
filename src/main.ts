@@ -975,6 +975,43 @@ export default class TephrameshPlugin extends Plugin {
     }, TephrameshPlugin.LABEL_SYNC_DEBOUNCE_MS);
   }
 
+  async updatePullOrder(pullOrder: string): Promise<void> {
+    const previous = this.settings.pullOrder;
+    this.settings.pullOrder = pullOrder as typeof this.settings.pullOrder;
+    await this.saveSettings();
+    const activeInstances = activeMeshInstances(this.settings.instances);
+    const results = await Promise.allSettled(activeInstances.map(async (instance) => {
+      const apiKey = this.getApiKey(instance.id);
+      if (!apiKey) throw new Error("API key unavailable");
+      const client = new SyncthingClient(instance.endpoint, apiKey);
+      await client.updateFolderPullOrder(this.settings.folderId, this.settings.pullOrder);
+    }));
+    const failures = results.filter((result) => result.status === "rejected").length;
+    if (failures > 0) {
+      this.settings.pullOrder = previous;
+      await this.saveSettings();
+      throw new Error(`Pull order could not be updated on ${failures} instance${failures === 1 ? "" : "s"}.`);
+    }
+  }
+
+  async updateGlobalIgnoreRules(lines: string[]): Promise<void> {
+    const previous = this.settings.globalIgnoreRules;
+    const normalized = lines.map((line) => line.replace(/\r/g, ""));
+    this.settings.globalIgnoreRules = normalized;
+    await this.saveSettings();
+    const results = await Promise.allSettled(activeMeshInstances(this.settings.instances).map(async (instance) => {
+      const apiKey = this.getApiKey(instance.id);
+      if (!apiKey) throw new Error("API key unavailable");
+      await new SyncthingClient(instance.endpoint, apiKey).updateDefaultIgnoreRules(normalized);
+    }));
+    const failures = results.filter((result) => result.status === "rejected").length;
+    if (failures > 0) {
+      this.settings.globalIgnoreRules = previous;
+      await this.saveSettings();
+      throw new Error(`Global ignore rules could not be updated on ${failures} instance${failures === 1 ? "" : "s"}.`);
+    }
+  }
+
   private async syncFolderLabelToAll(label: string): Promise<void> {
     const activeInstances = activeMeshInstances(this.settings.instances);
     if (!this.settings.folderId || activeInstances.length === 0) return;

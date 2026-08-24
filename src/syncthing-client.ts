@@ -84,6 +84,22 @@ export class SyncthingClient {
     return this.request<SyncthingFolder>("/rest/config/defaults/folder");
   }
 
+  async getDefaultIgnoreRules(): Promise<string[]> {
+    const result = await this.request<{ lines?: unknown }>("/rest/config/defaults/ignores");
+    return Array.isArray(result.lines) ? result.lines.filter((line): line is string => typeof line === "string") : [];
+  }
+
+  async updateDefaultIgnoreRules(lines: string[]): Promise<void> {
+    await this.request<void>("/rest/config/defaults/ignores", {
+      method: "PUT",
+      body: JSON.stringify({ lines }),
+    });
+    const updated = await this.getDefaultIgnoreRules();
+    if (JSON.stringify(updated) !== JSON.stringify(lines)) {
+      throw new SyncthingApiError("Syncthing did not retain the global ignore rules.");
+    }
+  }
+
   async getFolder(folderId: string): Promise<SyncthingFolder> {
     return this.request<SyncthingFolder>(
       `/rest/config/folders/${encodeURIComponent(folderId)}`,
@@ -101,6 +117,16 @@ export class SyncthingClient {
     const updated = await this.getFolder(folderId);
     if (updated.label !== label) {
       throw new SyncthingApiError("Syncthing did not retain the updated folder label.");
+    }
+  }
+
+  async updateFolderPullOrder(folderId: string, pullOrder: string): Promise<void> {
+    await this.request<void>(`/rest/config/folders/${encodeURIComponent(folderId)}`, {
+      method: "PATCH", body: JSON.stringify({ pullOrder }),
+    });
+    const updated = await this.getFolder(folderId);
+    if (updated.pullOrder !== pullOrder) {
+      throw new SyncthingApiError("Syncthing did not retain the managed folder pull order.");
     }
   }
 

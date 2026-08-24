@@ -4,6 +4,7 @@ export interface KnownDevice {
   name: string;
 }
 export type Protocol = "http" | "https";
+export type SyncthingPullOrder = "random" | "alphabetic" | "smallestFirst" | "largestFirst" | "oldestFirst" | "shuffle";
 
 export interface Endpoint {
   protocol: Protocol;
@@ -29,6 +30,8 @@ export interface TephrameshSettings {
   primaryInstanceId: string;
   folderId: string;
   folderLabel: string;
+  pullOrder: SyncthingPullOrder;
+  globalIgnoreRules: string[];
   shardEncryptionKeyHash: string;
   pollIntervalSeconds: number;
   noteSyncPollIntervalSeconds: number;
@@ -154,6 +157,8 @@ export const DEFAULT_SETTINGS: TephrameshSettings = {
   primaryInstanceId: "",
   folderId: "",
   folderLabel: "Obsidian vault",
+  pullOrder: "random",
+  globalIgnoreRules: [],
   shardEncryptionKeyHash: "",
   pollIntervalSeconds: 1,
   noteSyncPollIntervalSeconds: 5,
