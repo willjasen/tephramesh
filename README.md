@@ -25,6 +25,10 @@ below is a screenshot of a topology screen, showing two devices and two shards c
 
 <img width="642" height="645" alt="Screenshot 2026-08-24 at 9 06 32 AM" src="https://github.com/user-attachments/assets/d08a24fb-d867-40ab-b0f0-28407d664fd7" />
 
+here's a screenshot of the instances tab:
+
+<img width="650" height="560" alt="Screenshot 2026-08-24 at 9 21 44 AM" src="https://github.com/user-attachments/assets/282c23b1-f6d4-4cc6-9df9-c77cea099911" />
+
 and here is a screenshot of the vault tab:
 
 <img width="636" height="579" alt="Screenshot 2026-08-24 at 9 06 44 AM" src="https://github.com/user-attachments/assets/e32cd9c4-2481-4299-9aa6-c74543f48bb5" />
