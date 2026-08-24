@@ -1010,7 +1010,9 @@ export default class TephrameshPlugin extends Plugin {
     const results = await Promise.allSettled(activeMeshInstances(this.settings.instances).map(async (instance) => {
       const apiKey = this.getApiKey(instance.id);
       if (!apiKey) throw new Error("API key unavailable");
-      await new SyncthingClient(instance.endpoint, apiKey).ensureDefaultIgnoreRules(normalized);
+      const client = new SyncthingClient(instance.endpoint, apiKey);
+      await client.ensureDefaultIgnoreRules(normalized);
+      await client.ensureFolderIgnoreRules(this.settings.folderId, normalized);
     }));
     const failures = results.filter((result) => result.status === "rejected").length;
     if (failures > 0) {

@@ -106,6 +106,31 @@ export class SyncthingClient {
     }
   }
 
+  async ensureFolderIgnoreRules(folderId: string, managedLines: string[]): Promise<void> {
+    const current = await this.request<{ ignore?: unknown }>(
+      `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`,
+    );
+    const existing = Array.isArray(current.ignore)
+      ? current.ignore.filter((line): line is string => typeof line === "string")
+      : [];
+    const lines = [...existing];
+    for (const line of managedLines) {
+      if (!lines.includes(line)) lines.push(line);
+    }
+    if (JSON.stringify(lines) === JSON.stringify(existing)) return;
+    await this.request<void>(`/rest/db/ignores?folder=${encodeURIComponent(folderId)}`, {
+      method: "POST",
+      body: JSON.stringify({ ignore: lines }),
+    });
+    const updated = await this.request<{ ignore?: unknown }>(
+      `/rest/db/ignores?folder=${encodeURIComponent(folderId)}`,
+    );
+    const retained = Array.isArray(updated.ignore) ? updated.ignore : [];
+    if (JSON.stringify(retained) !== JSON.stringify(lines)) {
+      throw new SyncthingApiError("Syncthing did not retain the managed folder ignore rules.");
+    }
+  }
+
   async getFolder(folderId: string): Promise<SyncthingFolder> {
     return this.request<SyncthingFolder>(
       `/rest/config/folders/${encodeURIComponent(folderId)}`,
