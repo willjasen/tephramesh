@@ -278,7 +278,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
       .setName("Tephramesh ignore rules")
       .setDesc("Rules managed by Tephramesh and added to Syncthing defaults. Existing rules entered in Syncthing are preserved. One line per rule.")
       .addTextArea((text) => text
-        .setValue(this.plugin.settings.managedIgnoreRules.join("\n"))
+        .setValue(this.plugin.settings.managedIgnoreRules
+          .filter((line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()))
+          .join("\n"))
         .onChange((value) => {
           if (this.ignoreRulesTimer !== undefined) window.clearTimeout(this.ignoreRulesTimer);
           this.ignoreRulesTimer = window.setTimeout(() => {

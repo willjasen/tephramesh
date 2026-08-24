@@ -332,12 +332,16 @@ export default class TephrameshPlugin extends Plugin {
           : [],
         schemaVersion: 3,
       };
+      this.settings.managedIgnoreRules = this.settings.managedIgnoreRules.filter(
+        (line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()),
+      );
       const legacyRules = (protectedData.settings as TephrameshSettings & {
         globalIgnoreRules?: unknown;
       }).globalIgnoreRules;
       if (Array.isArray(legacyRules) && !Array.isArray((protectedData.settings as Partial<TephrameshSettings>).managedIgnoreRules)) {
         this.settings.managedIgnoreRules = legacyRules.filter(
-          (line): line is string => typeof line === "string",
+          (line): line is string => typeof line === "string" &&
+            !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()),
         );
       }
       this.secrets = protectedData.secrets;
@@ -1006,6 +1010,7 @@ export default class TephrameshPlugin extends Plugin {
     const previous = this.settings.managedIgnoreRules;
     const normalized = lines
       .map((line) => line.replace(/\r/g, "").trimEnd())
+      .filter((line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()))
       .filter((line) => line.length > 0);
     this.settings.managedIgnoreRules = normalized;
     await this.saveSettings();
