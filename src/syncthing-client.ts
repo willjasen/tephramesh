@@ -122,10 +122,10 @@ export class SyncthingClient {
 
   async updateFolderPullOrder(folderId: string, pullOrder: string): Promise<void> {
     await this.request<void>(`/rest/config/folders/${encodeURIComponent(folderId)}`, {
-      method: "PATCH", body: JSON.stringify({ pullOrder }),
+      method: "PATCH", body: JSON.stringify({ order: pullOrder }),
     });
     const updated = await this.getFolder(folderId);
-    if (updated.pullOrder !== pullOrder) {
+    if (updated.order !== pullOrder) {
       throw new SyncthingApiError("Syncthing did not retain the managed folder pull order.");
     }
   }

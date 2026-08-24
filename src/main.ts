@@ -1105,7 +1105,7 @@ export default class TephrameshPlugin extends Plugin {
           ? client.getFolder(this.settings.folderId).catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
-      const reportedPullOrder = folderConfig?.pullOrder;
+      const reportedPullOrder = folderConfig?.order;
       if (
         reportedPullOrder === "random" ||
         reportedPullOrder === "alphabetic" ||
