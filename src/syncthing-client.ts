@@ -91,7 +91,9 @@ export class SyncthingClient {
 
   async ensureDefaultIgnoreRules(managedLines: string[]): Promise<void> {
     const existing = await this.getDefaultIgnoreRules();
-    const lines = [...existing];
+    const lines = existing.filter((line) =>
+      !/^\/\/ always ignore \(from tephramesh\b/i.test(line.trim()),
+    );
     for (const line of managedLines) {
       if (!lines.includes(line)) lines.push(line);
     }
@@ -113,7 +115,9 @@ export class SyncthingClient {
     const existing = Array.isArray(current.ignore)
       ? current.ignore.filter((line): line is string => typeof line === "string")
       : [];
-    const lines = [...existing];
+    const lines = existing.filter((line) =>
+      !/^\/\/ always ignore \(from tephramesh\b/i.test(line.trim()),
+    );
     for (const line of managedLines) {
       if (!lines.includes(line)) lines.push(line);
     }

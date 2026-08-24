@@ -46,6 +46,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private reconciliationElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
   private visible = false;
+  private ignoreRulesTimer?: number;
 
   constructor(app: App, private readonly plugin: TephrameshPlugin) {
     super(app, plugin);
@@ -62,6 +63,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   hide(): void {
     this.visible = false;
     this.plugin.stopStatusPolling();
+    if (this.ignoreRulesTimer !== undefined) window.clearTimeout(this.ignoreRulesTimer);
   }
 
   rerenderIfVisible(): void {
@@ -277,10 +279,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
       .setDesc("Rules managed by Tephramesh and added to Syncthing defaults. Existing rules entered in Syncthing are preserved. One line per rule.")
       .addTextArea((text) => text
         .setValue(this.plugin.settings.managedIgnoreRules.join("\n"))
-        .onChange(async (value) => {
-          const lines = value.split(/\r?\n/);
-          this.plugin.settings.managedIgnoreRules = lines;
-          await this.plugin.updateManagedIgnoreRules(lines);
+        .onChange((value) => {
+          if (this.ignoreRulesTimer !== undefined) window.clearTimeout(this.ignoreRulesTimer);
+          this.ignoreRulesTimer = window.setTimeout(() => {
+            void this.plugin.updateManagedIgnoreRules(value.split(/\r?\n/));
+          }, 750);
         }));
     new Setting(container)
       .setName("Status refresh interval")

@@ -1004,7 +1004,9 @@ export default class TephrameshPlugin extends Plugin {
 
   async updateManagedIgnoreRules(lines: string[]): Promise<void> {
     const previous = this.settings.managedIgnoreRules;
-    const normalized = lines.map((line) => line.replace(/\r/g, ""));
+    const normalized = lines
+      .map((line) => line.replace(/\r/g, "").trimEnd())
+      .filter((line) => line.length > 0);
     this.settings.managedIgnoreRules = normalized;
     await this.saveSettings();
     const results = await Promise.allSettled(activeMeshInstances(this.settings.instances).map(async (instance) => {
