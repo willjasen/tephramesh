@@ -26,6 +26,8 @@ export class SyncthingApiError extends Error {
 }
 
 export class SyncthingClient {
+  private static readonly IGNORE_SECTION_START = "// BEGIN TEPHRAMESH MANAGED RULES";
+  private static readonly IGNORE_SECTION_END = "// END TEPHRAMESH MANAGED RULES";
   constructor(
     private readonly endpoint: Endpoint,
     private readonly apiKey: string,
@@ -91,12 +93,7 @@ export class SyncthingClient {
 
   async ensureDefaultIgnoreRules(managedLines: string[]): Promise<void> {
     const existing = await this.getDefaultIgnoreRules();
-    const lines = existing.filter((line) =>
-      !/^\/\/ always ignore \(from tephramesh\b/i.test(line.trim()),
-    );
-    for (const line of managedLines) {
-      if (!lines.includes(line)) lines.push(line);
-    }
+    const lines = this.withManagedIgnoreSection(existing, managedLines);
     if (JSON.stringify(lines) === JSON.stringify(existing)) return;
     await this.request<void>("/rest/config/defaults/ignores", {
       method: "PUT",
@@ -115,12 +112,7 @@ export class SyncthingClient {
     const existing = Array.isArray(current.ignore)
       ? current.ignore.filter((line): line is string => typeof line === "string")
       : [];
-    const lines = existing.filter((line) =>
-      !/^\/\/ always ignore \(from tephramesh\b/i.test(line.trim()),
-    );
-    for (const line of managedLines) {
-      if (!lines.includes(line)) lines.push(line);
-    }
+    const lines = this.withManagedIgnoreSection(existing, managedLines);
     if (JSON.stringify(lines) === JSON.stringify(existing)) return;
     await this.request<void>(`/rest/db/ignores?folder=${encodeURIComponent(folderId)}`, {
       method: "POST",
@@ -133,6 +125,23 @@ export class SyncthingClient {
     if (JSON.stringify(retained) !== JSON.stringify(lines)) {
       throw new SyncthingApiError("Syncthing did not retain the managed folder ignore rules.");
     }
+  }
+
+  private withManagedIgnoreSection(existing: string[], managedLines: string[]): string[] {
+    const start = existing.indexOf(SyncthingClient.IGNORE_SECTION_START);
+    const end = start < 0 ? -1 : existing.indexOf(SyncthingClient.IGNORE_SECTION_END, start + 1);
+    const withoutSection = start >= 0 && end >= start
+      ? [...existing.slice(0, start), ...existing.slice(end + 1)]
+      : existing.filter((line) => !/^\/\/ always ignore \(from tephramesh\b/i.test(line.trim()));
+    const cleanRules = managedLines.filter((line) => line.trim().length > 0);
+    if (cleanRules.length === 0) return withoutSection;
+    return [
+      ...withoutSection,
+      "",
+      SyncthingClient.IGNORE_SECTION_START,
+      ...cleanRules,
+      SyncthingClient.IGNORE_SECTION_END,
+    ];
   }
 
   async getFolder(folderId: string): Promise<SyncthingFolder> {
