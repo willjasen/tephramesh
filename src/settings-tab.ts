@@ -281,7 +281,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
             .filter((line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()))
             .join("\n"))
           .onChange(() => {});
-        text.inputEl.addEventListener("blur", () => {
+        text.inputEl.addEventListener("blur", (event) => {
+          // A settings refresh can detach the input and emit blur without a
+          // real focus change. Do not persist during that lifecycle event.
+          if (!event.relatedTarget) return;
           void this.plugin.updateManagedIgnoreRules(text.getValue().split(/\r?\n/));
         });
       });
