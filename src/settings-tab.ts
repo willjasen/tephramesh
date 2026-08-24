@@ -46,7 +46,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private reconciliationElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
   private visible = false;
-  private ignoreRulesTimer?: number;
 
   constructor(app: App, private readonly plugin: TephrameshPlugin) {
     super(app, plugin);
@@ -63,7 +62,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
   hide(): void {
     this.visible = false;
     this.plugin.stopStatusPolling();
-    if (this.ignoreRulesTimer !== undefined) window.clearTimeout(this.ignoreRulesTimer);
   }
 
   rerenderIfVisible(): void {
@@ -277,16 +275,16 @@ export class TephrameshSettingTab extends PluginSettingTab {
     new Setting(container)
       .setName("Tephramesh ignore rules")
       .setDesc("Rules managed by Tephramesh and added to Syncthing defaults. Existing rules entered in Syncthing are preserved. One line per rule.")
-      .addTextArea((text) => text
-        .setValue(this.plugin.settings.managedIgnoreRules
-          .filter((line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()))
-          .join("\n"))
-        .onChange((value) => {
-          if (this.ignoreRulesTimer !== undefined) window.clearTimeout(this.ignoreRulesTimer);
-          this.ignoreRulesTimer = window.setTimeout(() => {
-            void this.plugin.updateManagedIgnoreRules(value.split(/\r?\n/));
-          }, 750);
-        }));
+      .addTextArea((text) => {
+        text
+          .setValue(this.plugin.settings.managedIgnoreRules
+            .filter((line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()))
+            .join("\n"))
+          .onChange(() => {});
+        text.inputEl.addEventListener("blur", () => {
+          void this.plugin.updateManagedIgnoreRules(text.getValue().split(/\r?\n/));
+        });
+      });
     new Setting(container)
       .setName("Status refresh interval")
       .setDesc("Seconds between Syncthing status checks.")
