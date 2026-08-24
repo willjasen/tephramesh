@@ -1,5 +1,7 @@
 # Tephramesh
 
+[![Version](https://img.shields.io/github/package-json/v/willjasen/tephramesh)](https://github.com/willjasen/tephramesh/releases)
+
 [tephramesh](https://github.com/willjasen/tephramesh) is an obsidian plugin for monitoring and configuring a dedicated [syncthing](https://syncthing.net/) mesh for a single [obsidian](https://obsidian.md/) vault.
 
 # Overview
