@@ -130,14 +130,17 @@ export class SyncthingClient {
   private withManagedIgnoreSection(existing: string[], managedLines: string[]): string[] {
     const start = existing.indexOf(SyncthingClient.IGNORE_SECTION_START);
     const end = start < 0 ? -1 : existing.indexOf(SyncthingClient.IGNORE_SECTION_END, start + 1);
-    const withoutSection = start >= 0 && end >= start
+    let withoutSection = start >= 0 && end >= start
       ? [...existing.slice(0, start), ...existing.slice(end + 1)]
       : existing.filter((line) => !/^\/\/ always ignore \(from tephramesh\b/i.test(line.trim()));
     const cleanRules = managedLines.filter((line) => line.trim().length > 0);
+    const managedSet = new Set(cleanRules);
+    withoutSection = withoutSection.filter((line) => !managedSet.has(line));
+    while (withoutSection.at(-1)?.trim() === "") withoutSection.pop();
     if (cleanRules.length === 0) return withoutSection;
     return [
       ...withoutSection,
-      "",
+      ...(withoutSection.length > 0 ? [""] : []),
       SyncthingClient.IGNORE_SECTION_START,
       ...cleanRules,
       SyncthingClient.IGNORE_SECTION_END,
