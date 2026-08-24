@@ -4,7 +4,7 @@ export interface KnownDevice {
   name: string;
 }
 export type Protocol = "http" | "https";
-export type SyncthingPullOrder = "random" | "alphabetic" | "smallestFirst" | "largestFirst" | "oldestFirst" | "shuffle";
+export type SyncthingPullOrder = "random" | "alphabetic" | "smallestFirst" | "largestFirst" | "oldestFirst" | "newestFirst";
 
 export interface Endpoint {
   protocol: Protocol;
@@ -20,6 +20,7 @@ export interface MeshInstance {
   endpoint: Endpoint;
   deviceId: string;
   folderPath: string;
+  pullOrder?: SyncthingPullOrder;
   setupState?: "pending";
 }
 
@@ -30,7 +31,6 @@ export interface TephrameshSettings {
   primaryInstanceId: string;
   folderId: string;
   folderLabel: string;
-  pullOrder: SyncthingPullOrder;
   globalIgnoreRules: string[];
   shardEncryptionKeyHash: string;
   pollIntervalSeconds: number;
@@ -157,7 +157,6 @@ export const DEFAULT_SETTINGS: TephrameshSettings = {
   primaryInstanceId: "",
   folderId: "",
   folderLabel: "Obsidian vault",
-  pullOrder: "random",
   globalIgnoreRules: [],
   shardEncryptionKeyHash: "",
   pollIntervalSeconds: 1,

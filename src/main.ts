@@ -975,22 +975,22 @@ export default class TephrameshPlugin extends Plugin {
     }, TephrameshPlugin.LABEL_SYNC_DEBOUNCE_MS);
   }
 
-  async updatePullOrder(pullOrder: string): Promise<void> {
-    const previous = this.settings.pullOrder;
-    this.settings.pullOrder = pullOrder as typeof this.settings.pullOrder;
+  async updateInstancePullOrder(instance: MeshInstance, pullOrder: string): Promise<void> {
+    const previous = instance.pullOrder;
+    instance.pullOrder = pullOrder as MeshInstance["pullOrder"];
+    const desired = instance.pullOrder ?? "random";
     await this.saveSettings();
-    const activeInstances = activeMeshInstances(this.settings.instances);
-    const results = await Promise.allSettled(activeInstances.map(async (instance) => {
+    try {
       const apiKey = this.getApiKey(instance.id);
       if (!apiKey) throw new Error("API key unavailable");
-      const client = new SyncthingClient(instance.endpoint, apiKey);
-      await client.updateFolderPullOrder(this.settings.folderId, this.settings.pullOrder);
-    }));
-    const failures = results.filter((result) => result.status === "rejected").length;
-    if (failures > 0) {
-      this.settings.pullOrder = previous;
+      await new SyncthingClient(instance.endpoint, apiKey).updateFolderPullOrder(
+        this.settings.folderId,
+        desired,
+      );
+    } catch (error) {
+      instance.pullOrder = previous;
       await this.saveSettings();
-      throw new Error(`Pull order could not be updated on ${failures} instance${failures === 1 ? "" : "s"}.`);
+      throw error;
     }
   }
 
@@ -1105,6 +1105,17 @@ export default class TephrameshPlugin extends Plugin {
           ? client.getFolder(this.settings.folderId).catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
+      const reportedPullOrder = folderConfig?.pullOrder;
+      if (
+        reportedPullOrder === "random" ||
+        reportedPullOrder === "alphabetic" ||
+        reportedPullOrder === "smallestFirst" ||
+        reportedPullOrder === "largestFirst" ||
+        reportedPullOrder === "oldestFirst" ||
+        reportedPullOrder === "newestFirst"
+      ) {
+        instance.pullOrder = reportedPullOrder;
+      }
       const folder =
         initialFolderStatus?.state === "scanning"
           ? {

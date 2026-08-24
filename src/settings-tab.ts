@@ -283,19 +283,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
           await this.plugin.updateGlobalIgnoreRules(lines);
         }));
     new Setting(container)
-      .setName("Pull order")
-      .setDesc("How Syncthing chooses which needed files to download first.")
-      .addDropdown((dropdown) => dropdown
-        .addOption("random", "Random")
-        .addOption("alphabetic", "Alphabetical")
-        .addOption("smallestFirst", "Smallest first")
-        .addOption("largestFirst", "Largest first")
-        .addOption("oldestFirst", "Oldest first")
-        .addOption("shuffle", "Shuffle")
-        .setValue(this.plugin.settings.pullOrder)
-        .onChange(async (value) => { await this.plugin.updatePullOrder(value); }),
-      );
-    new Setting(container)
       .setName("Status refresh interval")
       .setDesc("Seconds between Syncthing status checks.")
       .addDropdown((dropdown) =>
@@ -404,6 +391,18 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       link.setAttribute("target", "_blank");
       link.setAttribute("rel", "noopener noreferrer");
+      setting.addDropdown((dropdown) => dropdown
+        .addOption("random", "Random")
+        .addOption("alphabetic", "Alphabetical")
+        .addOption("smallestFirst", "Smallest first")
+        .addOption("largestFirst", "Largest first")
+        .addOption("oldestFirst", "Oldest first")
+        .addOption("newestFirst", "Newest first")
+        .setValue(instance.pullOrder ?? "random")
+        .onChange(async (value) => {
+          await this.plugin.updateInstancePullOrder(instance, value);
+        }),
+      );
       const status = setting.descEl.createDiv({ cls: "tephramesh-status" });
       if (instance.setupState === "pending") {
         status.addClass("is-pending");
