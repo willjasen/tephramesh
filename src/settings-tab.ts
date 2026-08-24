@@ -273,14 +273,14 @@ export class TephrameshSettingTab extends PluginSettingTab {
         }),
       );
     new Setting(container)
-      .setName("Global ignore rules")
-      .setDesc("Default Syncthing ignore patterns for folders created on every mesh instance. One pattern per line.")
+      .setName("Tephramesh ignore rules")
+      .setDesc("Rules managed by Tephramesh and added to Syncthing defaults. Existing rules entered in Syncthing are preserved. One line per rule.")
       .addTextArea((text) => text
-        .setValue(this.plugin.settings.globalIgnoreRules.join("\n"))
+        .setValue(this.plugin.settings.managedIgnoreRules.join("\n"))
         .onChange(async (value) => {
           const lines = value.split(/\r?\n/);
-          this.plugin.settings.globalIgnoreRules = lines;
-          await this.plugin.updateGlobalIgnoreRules(lines);
+          this.plugin.settings.managedIgnoreRules = lines;
+          await this.plugin.updateManagedIgnoreRules(lines);
         }));
     new Setting(container)
       .setName("Status refresh interval")

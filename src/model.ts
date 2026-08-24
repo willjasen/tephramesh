@@ -31,7 +31,7 @@ export interface TephrameshSettings {
   primaryInstanceId: string;
   folderId: string;
   folderLabel: string;
-  globalIgnoreRules: string[];
+  managedIgnoreRules: string[];
   shardEncryptionKeyHash: string;
   pollIntervalSeconds: number;
   noteSyncPollIntervalSeconds: number;
@@ -157,7 +157,7 @@ export const DEFAULT_SETTINGS: TephrameshSettings = {
   primaryInstanceId: "",
   folderId: "",
   folderLabel: "Obsidian vault",
-  globalIgnoreRules: [],
+  managedIgnoreRules: ["// always ignore .DS_Store", "(?d).DS_Store"],
   shardEncryptionKeyHash: "",
   pollIntervalSeconds: 1,
   noteSyncPollIntervalSeconds: 5,

@@ -332,6 +332,14 @@ export default class TephrameshPlugin extends Plugin {
           : [],
         schemaVersion: 3,
       };
+      const legacyRules = (protectedData.settings as TephrameshSettings & {
+        globalIgnoreRules?: unknown;
+      }).globalIgnoreRules;
+      if (Array.isArray(legacyRules) && !Array.isArray((protectedData.settings as Partial<TephrameshSettings>).managedIgnoreRules)) {
+        this.settings.managedIgnoreRules = legacyRules.filter(
+          (line): line is string => typeof line === "string",
+        );
+      }
       this.secrets = protectedData.secrets;
       return;
     }
@@ -994,19 +1002,19 @@ export default class TephrameshPlugin extends Plugin {
     }
   }
 
-  async updateGlobalIgnoreRules(lines: string[]): Promise<void> {
-    const previous = this.settings.globalIgnoreRules;
+  async updateManagedIgnoreRules(lines: string[]): Promise<void> {
+    const previous = this.settings.managedIgnoreRules;
     const normalized = lines.map((line) => line.replace(/\r/g, ""));
-    this.settings.globalIgnoreRules = normalized;
+    this.settings.managedIgnoreRules = normalized;
     await this.saveSettings();
     const results = await Promise.allSettled(activeMeshInstances(this.settings.instances).map(async (instance) => {
       const apiKey = this.getApiKey(instance.id);
       if (!apiKey) throw new Error("API key unavailable");
-      await new SyncthingClient(instance.endpoint, apiKey).updateDefaultIgnoreRules(normalized);
+      await new SyncthingClient(instance.endpoint, apiKey).ensureDefaultIgnoreRules(normalized);
     }));
     const failures = results.filter((result) => result.status === "rejected").length;
     if (failures > 0) {
-      this.settings.globalIgnoreRules = previous;
+      this.settings.managedIgnoreRules = previous;
       await this.saveSettings();
       throw new Error(`Global ignore rules could not be updated on ${failures} instance${failures === 1 ? "" : "s"}.`);
     }

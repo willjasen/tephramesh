@@ -89,14 +89,20 @@ export class SyncthingClient {
     return Array.isArray(result.lines) ? result.lines.filter((line): line is string => typeof line === "string") : [];
   }
 
-  async updateDefaultIgnoreRules(lines: string[]): Promise<void> {
+  async ensureDefaultIgnoreRules(managedLines: string[]): Promise<void> {
+    const existing = await this.getDefaultIgnoreRules();
+    const lines = [...existing];
+    for (const line of managedLines) {
+      if (!lines.includes(line)) lines.push(line);
+    }
+    if (JSON.stringify(lines) === JSON.stringify(existing)) return;
     await this.request<void>("/rest/config/defaults/ignores", {
       method: "PUT",
       body: JSON.stringify({ lines }),
     });
     const updated = await this.getDefaultIgnoreRules();
     if (JSON.stringify(updated) !== JSON.stringify(lines)) {
-      throw new SyncthingApiError("Syncthing did not retain the global ignore rules.");
+      throw new SyncthingApiError("Syncthing did not retain the managed ignore rules.");
     }
   }
 
