@@ -118,7 +118,7 @@ To build and copy the plugin directly into the default `testing` vault:
 ./test.sh build
 ```
 
-The build option installs locked dependencies, builds the plugin, and copies `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/tephramesh`. It does not replace `data.json`, so local Tephramesh settings are preserved. The same command is also available as `npm run deploy:test`.
+The build option installs locked dependencies, builds the plugin, and copies `main.js`, `manifest.json`, and `styles.css` into both the `Notebox` vault and the iCloud-synced `testing` vault at `/Users/willjasen/Library/Mobile Documents/iCloud~md~obsidian/Documents/testing`. It then disables and re-enables Tephramesh through the Obsidian CLI in both vaults. It does not replace `data.json`, so local Tephramesh settings are preserved. The same command is also available as `npm run deploy:test`.
 
 To remove the plugin configuration and repeat onboarding from scratch:
 
@@ -128,7 +128,7 @@ To remove the plugin configuration and repeat onboarding from scratch:
 
 This removes only `.obsidian/plugins/tephramesh/data.json`, then automatically builds and redeploys the current plugin. Unrelated vault data is preserved. The local `tephramesh-age-identity` Keychain entry is stored separately and cannot be removed by the script. Reload Obsidian, or disable and re-enable Tephramesh, before beginning the fresh setup. The same command is available as `npm run clear:test`.
 
-To deploy to a different testing vault without editing the script:
+To deploy to a different testing vault instead of the two default destinations without editing the script:
 
 ```bash
 TEPHRAMESH_TEST_PLUGIN_DIR="/path/to/vault/.obsidian/plugins/tephramesh" ./test.sh build
