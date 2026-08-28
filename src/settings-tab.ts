@@ -834,16 +834,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
           : unavailableInstancesSummary(activeInstances, operatingInstances),
       });
       const operatingMetrics = operatingSection.createDiv({ cls: "tephramesh-topology-metrics" });
+      const globalSize = formatDataSize(operating.globalBytes) ?? "—";
       for (const [label, value] of [
         [operating.devices === 1 ? "Device" : "Devices", operating.devices],
         [operating.shards === 1 ? "Shard" : "Shards", operating.shards],
         [operating.connections === 1 ? "Connection" : "Connections", operating.connections],
-        [
-          "Global files",
-          operating.globalFiles === undefined
-            ? "—"
-            : `${operating.globalFiles}${formatDataSize(operating.globalBytes) ? ` · ${formatDataSize(operating.globalBytes)}` : ""}`,
-        ],
+        ["Global files", operating.globalFiles ?? "—"],
+        ["Global size", globalSize],
       ] as const) {
         const metric = operatingMetrics.createDiv({ cls: "tephramesh-topology-metric" });
         metric.createEl("strong", { text: String(value) });
