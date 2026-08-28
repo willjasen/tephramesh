@@ -373,9 +373,15 @@ export default class TephrameshPlugin extends Plugin {
         this.configHistoryBlocks = [];
         protectedData = await decryptProtectedData(identity, this.encryptedData);
       }
+      const {
+        globalIgnoreRules: _legacyGlobalIgnoreRules,
+        ...storedSettings
+      } = protectedData.settings as TephrameshProtectedData["settings"] & {
+        globalIgnoreRules?: unknown;
+      };
       this.settings = {
         ...structuredClone(DEFAULT_SETTINGS),
-        ...protectedData.settings,
+        ...storedSettings,
         ageRecipient: recipient,
         instances: Array.isArray(protectedData.settings.instances)
           ? protectedData.settings.instances
