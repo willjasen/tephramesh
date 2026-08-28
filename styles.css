@@ -172,6 +172,15 @@ button.tephramesh-pending-button {
   color: var(--text-success);
 }
 
+
+.tephramesh-topology.is-warning .tephramesh-topology-status strong {
+  color: var(--text-warning);
+}
+
+.tephramesh-topology-indicator.is-warning {
+  background: var(--text-warning);
+}
+
 .tephramesh-topology.is-incomplete .tephramesh-topology-status strong {
   color: var(--text-warning);
 }

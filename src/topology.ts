@@ -12,6 +12,28 @@ export function activeMeshInstances(instances: MeshInstance[]): MeshInstance[] {
   return instances.filter((instance) => instance.setupState !== "pending");
 }
 
+export function unavailableInstancesSummary(
+  configured: MeshInstance[],
+  operating: MeshInstance[],
+): string {
+  const operatingIds = new Set(operating.map((instance) => instance.id));
+  const counts = new Map<MeshInstance["kind"], number>();
+  for (const instance of configured) {
+    if (!operatingIds.has(instance.id)) counts.set(instance.kind, (counts.get(instance.kind) ?? 0) + 1);
+  }
+  const parts = (["device", "shard"] as const)
+    .filter((kind) => counts.has(kind))
+    .map((kind) => `${counts.get(kind)} ${kind}${counts.get(kind) === 1 ? "" : "s"}`);
+  return `${parts.join(" and ")} unavailable.`;
+}
+
+export function topologyHealthState(
+  configured: MeshInstance[],
+  operating: MeshInstance[],
+): "healthy" | "warning" {
+  return configured.length === operating.length ? "healthy" : "warning";
+}
+
 export function canRemoveInstance(
   instances: MeshInstance[],
   instance: MeshInstance,

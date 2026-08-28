@@ -18,6 +18,8 @@ import {
   isSyncthingSyncState,
   isRuntimeStatusFresh,
   meshRuntimeStates,
+  topologyHealthState,
+  unavailableInstancesSummary,
 } from "./topology";
 import { InstanceModal } from "./instance-modal";
 import { showTephrameshNotice } from "./notices";
@@ -778,16 +780,18 @@ export class TephrameshSettingTab extends PluginSettingTab {
       };
       const configured = metricsFor(activeInstances);
       const operating = metricsFor(operatingInstances);
+      const healthState = topologyHealthState(activeInstances, operatingInstances);
       this.topologyElement.addClass("is-valid");
+      if (healthState === "warning") this.topologyElement.addClass("is-warning");
 
       const configuredSection = this.topologyElement.createDiv({ cls: "tephramesh-topology-section" });
       configuredSection.createEl("h3", { text: "Configured" });
       const status = configuredSection.createDiv({
         cls: "tephramesh-topology-status",
       });
-      status.createSpan({ cls: "tephramesh-topology-indicator" });
+      status.createSpan({ cls: `tephramesh-topology-indicator is-${healthState}` });
       const statusText = status.createDiv();
-      statusText.createEl("strong", { text: "Healthy" });
+      statusText.createEl("strong", { text: healthState === "healthy" ? "Healthy" : "Warning" });
       const runtimeGroup = status.createDiv({
         cls: "tephramesh-topology-runtime-group",
       });
@@ -821,7 +825,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
         cls: "tephramesh-topology-subtitle",
         text: operatingInstances.length === activeInstances.length
           ? "Reachable instances currently participating in the mesh."
-          : `${activeInstances.length - operatingInstances.length} configured instance${activeInstances.length - operatingInstances.length === 1 ? " is" : "s are"} offline or unavailable.`,
+          : unavailableInstancesSummary(activeInstances, operatingInstances),
       });
       const operatingMetrics = operatingSection.createDiv({ cls: "tephramesh-topology-metrics" });
       for (const [label, value] of [

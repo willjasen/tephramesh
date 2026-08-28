@@ -8,6 +8,8 @@ import {
   meshPeerPolicy,
   meshRuntimeState,
   meshRuntimeStates,
+  topologyHealthState,
+  unavailableInstancesSummary,
 } from "../src/topology";
 
 const endpoint = { protocol: "https" as const, hostname: "example.com", port: 8384 };
@@ -163,6 +165,17 @@ describe("mesh runtime state", () => {
 });
 
 describe("active mesh instances", () => {
+  it("warns when configured mesh participants are unavailable", () => {
+    expect(topologyHealthState(instances, instances)).toBe("healthy");
+    expect(topologyHealthState(instances, instances.slice(1))).toBe("warning");
+  });
+
+  it("summarizes unavailable instances by role", () => {
+    expect(unavailableInstancesSummary(instances, instances.slice(1))).toBe("1 device unavailable.");
+    expect(unavailableInstancesSummary(instances, [instances[0]!])).toBe("1 device and 1 shard unavailable.");
+    expect(unavailableInstancesSummary(instances, [])).toBe("2 devices and 1 shard unavailable.");
+  });
+
   it("excludes pending instances from active safety and reconciliation work", () => {
     const pending: MeshInstance = {
       ...instances[1]!,
