@@ -28,6 +28,19 @@
   font-weight: var(--font-semibold);
 }
 
+.tephramesh-tab-indicator {
+  display: inline-block;
+  height: 0.55rem;
+  margin: 0 var(--size-4-2) 0 0;
+  vertical-align: middle;
+  width: 0.55rem;
+}
+
+.tephramesh-tab-indicator.is-warning,
+.tephramesh-tab-indicator.is-incomplete {
+  background: var(--text-warning);
+}
+
 .tephramesh-tab-content {
   min-width: 0;
 }

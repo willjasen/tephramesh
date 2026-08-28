@@ -52,6 +52,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private operatingSystemElements = new Map<string, HTMLElement>();
   private pauseButtons = new Map<string, ButtonComponent>();
   private topologyElement?: HTMLElement;
+  private topologyTabIndicator?: HTMLElement;
   private reconciliationElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
   private visible = false;
@@ -93,6 +94,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     this.operatingSystemElements.clear();
     this.pauseButtons.clear();
     this.topologyElement = undefined;
+    this.topologyTabIndicator = undefined;
     this.reconciliationElement = undefined;
     containerEl.createEl("h1", { text: "Tephramesh" });
 
@@ -249,9 +251,14 @@ export class TephrameshSettingTab extends PluginSettingTab {
     for (const section of visibleSections) {
       const active = section.id === this.activeSection;
       const button = tabs.createEl("button", {
-        text: section.label,
         cls: active ? "tephramesh-tab is-active" : "tephramesh-tab",
       });
+      if (section.id === "topology") {
+        this.topologyTabIndicator = button.createSpan({
+          cls: "tephramesh-topology-indicator tephramesh-tab-indicator",
+        });
+      }
+      button.createSpan({ text: section.label });
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", String(active));
       button.addEventListener("click", () => {
@@ -1251,6 +1258,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const healthState = topologyHealthState(activeInstances, operatingInstances);
       this.topologyElement.addClass("is-valid");
       if (healthState === "warning") this.topologyElement.addClass("is-warning");
+      this.topologyTabIndicator?.classList.remove("is-warning", "is-incomplete");
+      this.topologyTabIndicator?.addClass(`is-${healthState}`);
 
       const operatingSection = this.topologyElement.createDiv({ cls: "tephramesh-topology-section tephramesh-topology-operating" });
       const operatingHeading = operatingSection.createDiv({ cls: "tephramesh-topology-heading" });
@@ -1324,6 +1333,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
       encrypted.createSpan({ text: "Receive Encrypted · ciphertext at rest" });
     } catch (error) {
       this.topologyElement.addClass("is-incomplete");
+      this.topologyTabIndicator?.classList.remove("is-warning", "is-healthy");
+      this.topologyTabIndicator?.addClass("is-incomplete");
       const status = this.topologyElement.createDiv({
         cls: "tephramesh-topology-status",
       });
