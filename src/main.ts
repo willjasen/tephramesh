@@ -28,8 +28,19 @@ import {
   emptySecrets,
   encryptProtectedData,
   type TephrameshSecrets,
+  type TephrameshProtectedData,
   validateAgeKeyPair,
 } from "./secret-bundle";
+import {
+  createConfigHistoryBlock,
+  decryptConfigHistory,
+  DEFAULT_CONFIG_HISTORY_VERSIONS,
+  isConfigHistoryEnvelope,
+  encryptConfigHistory,
+  normalizeConfigHistoryVersions,
+  verifyConfigHistory,
+  type ConfigHistoryBlock,
+} from "./config-history";
 
 interface EncryptedSettingsEnvelope {
   schemaVersion: 3;
@@ -59,6 +70,7 @@ export default class TephrameshPlugin extends Plugin {
   };
   private secrets?: TephrameshSecrets;
   private encryptedData = "";
+  private configHistoryBlocks: ConfigHistoryBlock[] = [];
   private storageFormat: 2 | 3 = 3;
   private settingTab!: TephrameshSettingTab;
   private pollingTimer?: number;
@@ -130,6 +142,7 @@ export default class TephrameshPlugin extends Plugin {
         ageRecipient: stored.ageRecipient ?? "",
       };
       this.encryptedData = stored.encryptedData;
+      this.configHistoryBlocks = [];
       this.storageFormat = 3;
       return;
     }
@@ -145,6 +158,7 @@ export default class TephrameshPlugin extends Plugin {
         ? legacy.encryptedSecrets ?? ""
         : "";
     this.storageFormat = 2;
+    this.configHistoryBlocks = [];
   }
 
   async saveSettings(): Promise<void> {
@@ -152,10 +166,25 @@ export default class TephrameshPlugin extends Plugin {
       throw new Error("Unlock Tephramesh encryption before saving settings.");
     }
     const { ageRecipient, ...protectedSettings } = this.settings;
-    this.encryptedData = await encryptProtectedData(ageRecipient, {
+    const protectedData = {
       schemaVersion: 1,
       settings: protectedSettings,
       secrets: this.secrets,
+    } as const;
+    const retention = normalizeConfigHistoryVersions(this.settings.configHistoryVersions || DEFAULT_CONFIG_HISTORY_VERSIONS);
+    const configHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(protectedData)));
+    const serializedHash = Array.from(new Uint8Array(configHash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const previous = this.configHistoryBlocks.at(-1);
+    let blocks = this.configHistoryBlocks;
+    if (previous?.configHash !== serializedHash) {
+      blocks = [...blocks, await createConfigHistoryBlock(protectedData, previous)];
+    }
+    blocks = blocks.slice(-retention);
+    this.configHistoryBlocks = blocks;
+    this.encryptedData = await encryptConfigHistory(ageRecipient, {
+      format: "tephramesh-config-history-v1",
+      retention,
+      blocks,
     });
     this.storageFormat = 3;
     await this.saveData({
@@ -322,7 +351,18 @@ export default class TephrameshPlugin extends Plugin {
   private async decryptStoredData(identity: string): Promise<void> {
     if (this.storageFormat === 3) {
       const recipient = this.settings.ageRecipient;
-      const protectedData = await decryptProtectedData(identity, this.encryptedData);
+      const decrypted = await decryptConfigHistory(identity, this.encryptedData);
+      let protectedData: TephrameshProtectedData;
+      if (isConfigHistoryEnvelope(decrypted)) {
+        await verifyConfigHistory(decrypted.blocks);
+        this.configHistoryBlocks = decrypted.blocks.slice(-normalizeConfigHistoryVersions(this.settings.configHistoryVersions));
+        const latest = this.configHistoryBlocks.at(-1)?.config;
+        if (!latest) throw new Error("The Tephramesh configuration history has no versions.");
+        protectedData = latest;
+      } else {
+        this.configHistoryBlocks = [];
+        protectedData = await decryptProtectedData(identity, this.encryptedData);
+      }
       this.settings = {
         ...structuredClone(DEFAULT_SETTINGS),
         ...protectedData.settings,
@@ -1089,9 +1129,30 @@ export default class TephrameshPlugin extends Plugin {
         this.nextNameRefreshAt = now + TephrameshPlugin.NAME_REFRESH_INTERVAL_MS;
       }
       const nameChanges = await Promise.all(
-        this.settings.instances.map((instance) =>
-          this.refreshInstanceStatus(instance, false, checkNames),
-        ),
+        this.settings.instances.map(async (instance) => {
+          const timeoutMs = Math.max(1, this.settings.offlineTimeoutSeconds) * 1000;
+          let timer: number | undefined;
+          try {
+            return await Promise.race([
+              this.refreshInstanceStatus(instance, false, checkNames),
+              new Promise<boolean>((_, reject) => {
+                timer = window.setTimeout(
+                  () => reject(new Error(`Status check timed out after ${this.settings.offlineTimeoutSeconds} seconds`)),
+                  timeoutMs,
+                );
+              }),
+            ]);
+          } catch (error) {
+            this.runtimeStatuses.set(instance.id, {
+              checkedAt: Date.now(),
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return false;
+          } finally {
+            if (timer !== undefined) window.clearTimeout(timer);
+          }
+        }),
       );
       if (nameChanges.some(Boolean)) {
         await this.saveSettings();

@@ -26,12 +26,20 @@ export function isSyncthingSyncState(state: string | undefined): boolean {
   return state === "syncing" || state === "sync-preparing" || state === "sync-waiting";
 }
 
+export function isRuntimeStatusFresh(status: InstanceRuntimeStatus | undefined, timeoutSeconds?: number, now = Date.now()): boolean {
+  return Boolean(status?.ok) && (timeoutSeconds === undefined || now - (status?.checkedAt ?? 0) <= Math.max(1, timeoutSeconds) * 1000);
+}
+
 export function meshRuntimeStates(
   instances: MeshInstance[],
   statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
+  timeoutSeconds?: number,
 ): MeshRuntimeState[] {
   const activeState = meshRuntimeState(
-    activeMeshInstances(instances).map((instance) => statuses.get(instance.id)),
+    activeMeshInstances(instances).map((instance) => {
+      const status = statuses.get(instance.id);
+      return isRuntimeStatusFresh(status, timeoutSeconds) ? status : status ? { ...status, ok: false } : undefined;
+    }),
   );
   return instances.some((instance) => instance.setupState === "pending")
     ? [activeState, "pending"]

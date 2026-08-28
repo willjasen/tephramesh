@@ -320,7 +320,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.offlineTimeoutSeconds = Number(value);
             await this.plugin.saveSettings();
-            this.updateTopology();
+            await this.plugin.refreshStatuses(true);
           }),
       );
     new Setting(container)
@@ -340,6 +340,22 @@ export class TephrameshSettingTab extends PluginSettingTab {
             this.plugin.restartNoteSyncPolling();
           }),
       );
+    new Setting(container)
+      .setName("Saved config versions")
+      .setDesc("Number of encrypted configuration versions to retain (1–10).")
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = "1";
+        text.inputEl.max = "10";
+        text.inputEl.step = "1";
+        text.setValue(String(this.plugin.settings.configHistoryVersions));
+        text.onChange(async (value) => {
+          const count = Number(value);
+          if (!Number.isInteger(count) || count < 1 || count > 10) return;
+          this.plugin.settings.configHistoryVersions = count;
+          await this.plugin.saveSettings();
+        });
+      });
     const hostCount = activeMeshInstances(this.plugin.settings.instances).length;
     const defaultRequiredHosts = Math.max(
       1,

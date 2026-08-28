@@ -37,6 +37,7 @@ export interface TephrameshSettings {
   offlineTimeoutSeconds: number;
   noteSyncPollIntervalSeconds: number;
   noteSyncRequiredHosts: number;
+  configHistoryVersions: number;
   instances: MeshInstance[];
   knownDevices: KnownDevice[];
 }
@@ -165,6 +166,7 @@ export const DEFAULT_SETTINGS: TephrameshSettings = {
   offlineTimeoutSeconds: 5,
   noteSyncPollIntervalSeconds: 5,
   noteSyncRequiredHosts: 0,
+  configHistoryVersions: 10,
   instances: [],
   knownDevices: [],
 };
