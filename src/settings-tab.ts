@@ -31,6 +31,7 @@ import { formatTransferRate } from "./syncthing-traffic";
 import { EditEndpointModal } from "./edit-endpoint-modal";
 import { MeshNotReadyError } from "./mesh-errors";
 import { DeleteConfigModal } from "./delete-config-modal";
+import { formatDataSize } from "./format";
 
 type SettingsSection = "instances" | "vault" | "config" | "topology";
 
@@ -771,11 +772,16 @@ export class TephrameshSettingTab extends PluginSettingTab {
           const value = this.plugin.runtimeStatuses.get(instance.id)?.folder?.globalFiles;
           return typeof value === "number" && Number.isFinite(value) ? [value] : [];
         });
+        const reportedGlobalBytes = instances.flatMap((instance) => {
+          const value = this.plugin.runtimeStatuses.get(instance.id)?.folder?.globalBytes;
+          return typeof value === "number" && Number.isFinite(value) ? [value] : [];
+        });
         return {
           devices,
           shards: count - devices,
           connections: (count * (count - 1)) / 2,
           globalFiles: reportedGlobalFiles.length > 0 ? Math.max(...reportedGlobalFiles) : undefined,
+          globalBytes: reportedGlobalBytes.length > 0 ? Math.max(...reportedGlobalBytes) : undefined,
         };
       };
       const configured = metricsFor(activeInstances);
@@ -832,7 +838,12 @@ export class TephrameshSettingTab extends PluginSettingTab {
         [operating.devices === 1 ? "Device" : "Devices", operating.devices],
         [operating.shards === 1 ? "Shard" : "Shards", operating.shards],
         [operating.connections === 1 ? "Connection" : "Connections", operating.connections],
-        ["Global files", operating.globalFiles ?? "—"],
+        [
+          "Global files",
+          operating.globalFiles === undefined
+            ? "—"
+            : `${operating.globalFiles}${formatDataSize(operating.globalBytes) ? ` · ${formatDataSize(operating.globalBytes)}` : ""}`,
+        ],
       ] as const) {
         const metric = operatingMetrics.createDiv({ cls: "tephramesh-topology-metric" });
         metric.createEl("strong", { text: String(value) });
