@@ -9,6 +9,8 @@ import {
   meshRuntimeState,
   meshRuntimeStates,
   topologyHealthState,
+  unavailableInstanceLabels,
+  unavailableStatusIsTolerated,
   unavailableInstancesSummary,
 } from "../src/topology";
 
@@ -168,6 +170,20 @@ describe("active mesh instances", () => {
   it("warns when configured mesh participants are unavailable", () => {
     expect(topologyHealthState(instances, instances)).toBe("healthy");
     expect(topologyHealthState(instances, instances.slice(1))).toBe("warning");
+  });
+
+  it("tolerates unavailable status when fewer than all hosts are required", () => {
+    expect(unavailableStatusIsTolerated(3, 3)).toBe(false);
+    expect(unavailableStatusIsTolerated(2, 3)).toBe(true);
+  });
+
+  it("lists unavailable hosts by role and name", () => {
+    expect(unavailableInstanceLabels(instances, instances.slice(1))).toEqual(["Device: Laptop"]);
+    expect(unavailableInstanceLabels(instances, [])).toEqual([
+      "Device: Laptop",
+      "Device: Phone",
+      "Shard: Shard",
+    ]);
   });
 
   it("summarizes unavailable instances by role", () => {

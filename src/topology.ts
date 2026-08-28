@@ -34,6 +34,20 @@ export function topologyHealthState(
   return configured.length === operating.length ? "healthy" : "warning";
 }
 
+export function unavailableStatusIsTolerated(requiredHosts: number, activeHostCount: number): boolean {
+  return requiredHosts < activeHostCount;
+}
+
+export function unavailableInstanceLabels(
+  configured: MeshInstance[],
+  operating: MeshInstance[],
+): string[] {
+  const operatingIds = new Set(operating.map((instance) => instance.id));
+  return configured
+    .filter((instance) => !operatingIds.has(instance.id))
+    .map((instance) => `${instance.kind === "device" ? "Device" : "Shard"}: ${instance.name}`);
+}
+
 export function canRemoveInstance(
   instances: MeshInstance[],
   instance: MeshInstance,

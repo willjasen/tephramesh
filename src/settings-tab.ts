@@ -19,6 +19,8 @@ import {
   isRuntimeStatusFresh,
   meshRuntimeStates,
   topologyHealthState,
+  unavailableInstanceLabels,
+  unavailableStatusIsTolerated,
   unavailableInstancesSummary,
 } from "./topology";
 import { InstanceModal } from "./instance-modal";
@@ -800,6 +802,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const configured = metricsFor(activeInstances);
       const operating = metricsFor(operatingInstances);
       const healthState = topologyHealthState(activeInstances, operatingInstances);
+      const unavailableIsTolerated = unavailableStatusIsTolerated(
+        this.plugin.settings.noteSyncRequiredHosts,
+        activeInstances.length,
+      );
+      const unavailableLabels = unavailableInstanceLabels(activeInstances, operatingInstances);
       this.topologyElement.addClass("is-valid");
       if (healthState === "warning") this.topologyElement.addClass("is-warning");
 
@@ -819,10 +826,14 @@ export class TephrameshSettingTab extends PluginSettingTab {
         this.plugin.runtimeStatuses,
         this.plugin.settings.offlineTimeoutSeconds,
       )) {
-        runtimeGroup.createSpan({
-          cls: `tephramesh-topology-runtime is-${runtimeState}`,
+        const runtimeBadge = runtimeGroup.createSpan({
+          cls: `tephramesh-topology-runtime is-${runtimeState}${runtimeState === "unavailable" && unavailableIsTolerated ? " is-warning" : ""}`,
           text: runtimeState,
         });
+        if (runtimeState === "unavailable") {
+          runtimeBadge.setAttribute("title", unavailableLabels.join("\n"));
+          runtimeBadge.setAttribute("aria-label", `Unavailable: ${unavailableLabels.join(", ")}`);
+        }
       }
 
       const metrics = configuredSection.createDiv({

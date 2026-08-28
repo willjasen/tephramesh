@@ -231,6 +231,10 @@ button.tephramesh-pending-button {
   color: var(--text-error);
 }
 
+.tephramesh-topology-runtime.is-unavailable.is-warning {
+  color: var(--text-warning);
+}
+
 .tephramesh-topology-runtime.is-pending {
   color: var(--text-warning);
 }
