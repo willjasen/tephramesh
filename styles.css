@@ -331,6 +331,14 @@ button.tephramesh-pending-button {
   font-size: clamp(0.75rem, 12cqw, 1.4em);
 }
 
+.tephramesh-topology-operating .tephramesh-topology-metric strong {
+  font-size: 1.4em;
+}
+
+.tephramesh-topology-operating .tephramesh-topology-metric span {
+  font-size: 0.85em;
+}
+
 .tephramesh-topology-metric span,
 .tephramesh-topology-detail span,
 .tephramesh-topology-details p {
