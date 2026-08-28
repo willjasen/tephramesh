@@ -1,5 +1,14 @@
 # version history
 
+## 0.3.0 (beta)
+
+ - add configurable note sync host threshold
+ - show the global folder size
+ - show a logo of the operating system of the syncthing instance
+ - fix for shard trust setting
+
+---
+
 ## 0.2.0
 
  - show the config under the "Config" tab

@@ -11,6 +11,7 @@ import {
   activeMeshInstances,
   canRemoveInstance,
   createMeshPlan,
+  isRuntimeStatusFresh,
   meshPeerPolicy,
 } from "./topology";
 import { pendingFolderPaths, pendingNotePathsForHostThreshold } from "./note-sync";
@@ -80,9 +81,17 @@ export default class TephrameshPlugin extends Plugin {
   private pendingNotePaths = new Set<string>();
   private fileExplorerObserver?: MutationObserver;
   private refreshInProgress = false;
+  private forcedStatusRefreshPending = false;
+  /**
+   * A requestUrl call cannot be aborted. Keep timed-out instance checks in
+   * flight and reuse them instead of starting another batch of requests on
+   * every polling tick.
+   */
+  private instanceStatusChecks = new Map<string, Promise<boolean>>();
   private nextNameRefreshAt = 0;
   private nextReconciliationAt = 0;
   private reconciliationInProgress = false;
+  private reconciliationChecks = new Map<string, Promise<InstanceReconciliationSnapshot>>();
   private folderLabelSyncTimer?: number;
   private folderLabelSyncQueue: Promise<void> = Promise.resolve();
   private static readonly NAME_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -501,14 +510,13 @@ export default class TephrameshPlugin extends Plugin {
     const apiKey = this.getApiKey(instance.id);
     if (!apiKey) throw new Error("API key unavailable");
     const client = new SyncthingClient(instance.endpoint, apiKey);
-    const [system, devices, folders, pendingDevices, pendingFolders] =
-      await Promise.all([
-        client.getSystemStatus(),
-        client.getDevices(),
-        client.getFolders(),
-        client.getPendingDevices(),
-        client.getPendingFolders(),
-      ]);
+    // Reconciliation shares Electron's network stack with status polling.
+    // Keep one request per host active at a time to avoid another burst path.
+    const system = await client.getSystemStatus();
+    const devices = await client.getDevices();
+    const folders = await client.getFolders();
+    const pendingDevices = await client.getPendingDevices();
+    const pendingFolders = await client.getPendingFolders();
     const hasManagedFolder = folders.some(
       (folder) => folder.id === this.settings.folderId,
     );
@@ -526,6 +534,35 @@ export default class TephrameshPlugin extends Plugin {
     };
   }
 
+  private async inspectInstanceForReconciliationBounded(
+    instance: MeshInstance,
+  ): Promise<InstanceReconciliationSnapshot> {
+    let check = this.reconciliationChecks.get(instance.id);
+    if (!check) {
+      check = this.inspectInstanceForReconciliation(instance).finally(() => {
+        if (this.reconciliationChecks.get(instance.id) === check) {
+          this.reconciliationChecks.delete(instance.id);
+        }
+      });
+      this.reconciliationChecks.set(instance.id, check);
+    }
+    const timeoutMs = Math.max(1, this.settings.offlineTimeoutSeconds) * 1000;
+    let timer: number | undefined;
+    try {
+      return await Promise.race([
+        check,
+        new Promise<InstanceReconciliationSnapshot>((_, reject) => {
+          timer = window.setTimeout(
+            () => reject(new Error(`Reconciliation check timed out after ${this.settings.offlineTimeoutSeconds} seconds`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) window.clearTimeout(timer);
+    }
+  }
+
   async refreshReconciliation(force = false): Promise<ReconciliationReport> {
     if (this.reconciliationInProgress) return this.reconciliationReport;
     if (
@@ -541,18 +578,27 @@ export default class TephrameshPlugin extends Plugin {
     }
     this.nextReconciliationAt = now + TephrameshPlugin.RECONCILIATION_INTERVAL_MS;
     this.reconciliationInProgress = true;
+    // Keep the last completed inspection visible while the next one is running.
+    // This avoids clearing the diagnostic just because the offline-timeout-bounded
+    // checks have started; the completed result is replaced atomically below.
     this.reconciliationReport = {
       state: "checking",
-      issues: [],
-      repairBlockedReasons: [],
+      issues: this.reconciliationReport.issues,
+      repairBlockedReasons: this.reconciliationReport.repairBlockedReasons,
     };
     this.settingTab?.refreshReconciliationReport();
     try {
       const activeInstances = activeMeshInstances(this.settings.instances);
       const settled = await Promise.allSettled(
-        activeInstances.map((instance) =>
-          this.inspectInstanceForReconciliation(instance),
-        ),
+        activeInstances.map((instance) => {
+          const status = this.runtimeStatuses.get(instance.id);
+          if (!isRuntimeStatusFresh(status, this.settings.offlineTimeoutSeconds)) {
+            return Promise.reject(new Error(
+              status?.error ?? `No successful status check in the last ${this.settings.offlineTimeoutSeconds} seconds`,
+            ));
+          }
+          return this.inspectInstanceForReconciliationBounded(instance);
+        }),
       );
       const snapshots: InstanceReconciliationSnapshot[] = [];
       const unavailable: ReconciliationIssue[] = [];
@@ -1133,11 +1179,17 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   async refreshStatuses(forceNameCheck = false): Promise<void> {
-    if (
-      this.refreshInProgress ||
-      !this.settings.onboardingComplete ||
-      !this.secretsAreUnlocked()
-    ) return;
+    if (!this.settings.onboardingComplete || !this.secretsAreUnlocked()) return;
+    if (this.refreshInProgress) {
+      if (forceNameCheck) this.forcedStatusRefreshPending = true;
+      return;
+    }
+    const availabilityBefore = activeMeshInstances(this.settings.instances)
+      .map((instance) => `${instance.id}:${isRuntimeStatusFresh(
+        this.runtimeStatuses.get(instance.id),
+        this.settings.offlineTimeoutSeconds,
+      )}`)
+      .join("|");
     this.refreshInProgress = true;
     try {
       const now = Date.now();
@@ -1150,8 +1202,17 @@ export default class TephrameshPlugin extends Plugin {
           const timeoutMs = Math.max(1, this.settings.offlineTimeoutSeconds) * 1000;
           let timer: number | undefined;
           try {
+            let check = this.instanceStatusChecks.get(instance.id);
+            if (!check) {
+              check = this.refreshInstanceStatus(instance, false, checkNames).finally(() => {
+                if (this.instanceStatusChecks.get(instance.id) === check) {
+                  this.instanceStatusChecks.delete(instance.id);
+                }
+              });
+              this.instanceStatusChecks.set(instance.id, check);
+            }
             return await Promise.race([
-              this.refreshInstanceStatus(instance, false, checkNames),
+              check,
               new Promise<boolean>((_, reject) => {
                 timer = window.setTimeout(
                   () => reject(new Error(`Status check timed out after ${this.settings.offlineTimeoutSeconds} seconds`)),
@@ -1178,7 +1239,17 @@ export default class TephrameshPlugin extends Plugin {
     } finally {
       this.refreshInProgress = false;
       this.settingTab.refreshRuntimeStatuses(this.runtimeStatuses);
-      void this.refreshReconciliation();
+      const availabilityAfter = activeMeshInstances(this.settings.instances)
+        .map((instance) => `${instance.id}:${isRuntimeStatusFresh(
+          this.runtimeStatuses.get(instance.id),
+          this.settings.offlineTimeoutSeconds,
+        )}`)
+        .join("|");
+      void this.refreshReconciliation(availabilityBefore !== availabilityAfter);
+      if (this.forcedStatusRefreshPending) {
+        this.forcedStatusRefreshPending = false;
+        void this.refreshStatuses(true);
+      }
     }
   }
 
@@ -1192,19 +1263,19 @@ export default class TephrameshPlugin extends Plugin {
       const apiKey = this.getApiKey(instance.id);
       if (!apiKey) throw new Error("API key is unavailable in the encrypted configuration");
       const client = new SyncthingClient(instance.endpoint, apiKey);
-      const [system, version, connections, initialFolderStatus, devices, folderConfig] = await Promise.all([
-        client.getSystemStatus(),
-        client.getVersion(),
-        client.getConnections(),
-        this.settings.folderId
-          ? client.getFolderStatus(this.settings.folderId).catch(() => undefined)
-          : Promise.resolve(undefined),
-        checkName ? client.getDevices() : Promise.resolve(undefined),
-        instance.setupState !== "pending" &&
-          this.settings.folderId
-          ? client.getFolder(this.settings.folderId).catch(() => undefined)
-          : Promise.resolve(undefined),
-      ]);
+      // Obsidian's requestUrl uses Electron's shared Chromium network stack.
+      // Keep each host to one request at a time so polling several instances
+      // cannot create a large simultaneous socket burst.
+      const system = await client.getSystemStatus();
+      const version = await client.getVersion();
+      const connections = await client.getConnections();
+      const initialFolderStatus = this.settings.folderId
+        ? await client.getFolderStatus(this.settings.folderId).catch(() => undefined)
+        : undefined;
+      const devices = checkName ? await client.getDevices() : undefined;
+      const folderConfig = instance.setupState !== "pending" && this.settings.folderId
+        ? await client.getFolder(this.settings.folderId).catch(() => undefined)
+        : undefined;
       const reportedPullOrder = folderConfig?.order;
       if (
         reportedPullOrder === "random" ||

@@ -316,6 +316,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
             this.plugin.settings.pollIntervalSeconds = Number(value);
             await this.plugin.saveSettings();
             this.plugin.restartPolling();
+            await this.plugin.refreshStatuses(true);
           }),
       );
     new Setting(container)
@@ -777,7 +778,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private updateTopology(): void {
     if (!this.topologyElement) return;
     this.topologyElement.empty();
-    this.topologyElement.removeClass("is-valid", "is-incomplete");
+    this.topologyElement.removeClass("is-valid", "is-incomplete", "is-warning");
     try {
       createMeshPlan(
         this.plugin.settings.instances,
