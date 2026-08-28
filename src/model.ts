@@ -34,7 +34,9 @@ export interface TephrameshSettings {
   managedIgnoreRules: string[];
   shardEncryptionKeyHash: string;
   pollIntervalSeconds: number;
+  offlineTimeoutSeconds: number;
   noteSyncPollIntervalSeconds: number;
+  noteSyncRequiredHosts: number;
   instances: MeshInstance[];
   knownDevices: KnownDevice[];
 }
@@ -160,7 +162,9 @@ export const DEFAULT_SETTINGS: TephrameshSettings = {
   managedIgnoreRules: ["// always ignore .DS_Store", "(?d).DS_Store"],
   shardEncryptionKeyHash: "",
   pollIntervalSeconds: 1,
+  offlineTimeoutSeconds: 5,
   noteSyncPollIntervalSeconds: 5,
+  noteSyncRequiredHosts: 0,
   instances: [],
   knownDevices: [],
 };

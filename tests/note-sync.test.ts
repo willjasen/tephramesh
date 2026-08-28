@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { pendingFolderPaths } from "../src/note-sync";
+import { pendingFolderPaths, pendingNotePathsForHostThreshold } from "../src/note-sync";
+
+describe("pendingNotePathsForHostThreshold", () => {
+  it("clears a note once it is available on the required hosts", () => {
+    expect(pendingNotePathsForHostThreshold([["a.md"], [], ["b.md"], ["b.md"]], 4, 3)).toEqual(new Set(["b.md"]));
+  });
+});
 
 describe("pendingFolderPaths", () => {
   it("marks every ancestor folder of pending notes", () => {

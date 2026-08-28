@@ -16,6 +16,7 @@ import {
   canRemoveInstance,
   createMeshPlan,
   isSyncthingSyncState,
+  isRuntimeStatusFresh,
   meshRuntimeStates,
 } from "./topology";
 import { InstanceModal } from "./instance-modal";
@@ -288,7 +289,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
           void this.plugin.updateManagedIgnoreRules(text.getValue().split(/\r?\n/));
         });
       });
-    new Setting(container)
+      new Setting(container)
       .setName("Status refresh interval")
       .setDesc("Seconds between Syncthing status checks.")
       .addDropdown((dropdown) =>
@@ -303,6 +304,23 @@ export class TephrameshSettingTab extends PluginSettingTab {
             this.plugin.settings.pollIntervalSeconds = Number(value);
             await this.plugin.saveSettings();
             this.plugin.restartPolling();
+          }),
+      );
+    new Setting(container)
+      .setName("Offline timeout")
+      .setDesc("Seconds without a successful status check before a device or shard is considered offline.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("1", "1 second")
+          .addOption("5", "5 seconds")
+          .addOption("10", "10 seconds")
+          .addOption("30", "30 seconds")
+          .addOption("60", "1 minute")
+          .setValue(String(this.plugin.settings.offlineTimeoutSeconds))
+          .onChange(async (value) => {
+            this.plugin.settings.offlineTimeoutSeconds = Number(value);
+            await this.plugin.saveSettings();
+            this.updateTopology();
           }),
       );
     new Setting(container)
@@ -322,6 +340,32 @@ export class TephrameshSettingTab extends PluginSettingTab {
             this.plugin.restartNoteSyncPolling();
           }),
       );
+    const hostCount = activeMeshInstances(this.plugin.settings.instances).length;
+    const defaultRequiredHosts = Math.max(
+      1,
+      activeMeshInstances(this.plugin.settings.instances).filter((instance) => instance.kind === "shard").length + 1,
+    );
+    const requiredHosts = Math.max(
+      1,
+      Math.min(this.plugin.settings.noteSyncRequiredHosts || defaultRequiredHosts, hostCount || 1),
+    );
+    if (this.plugin.settings.noteSyncRequiredHosts !== requiredHosts) {
+      this.plugin.settings.noteSyncRequiredHosts = requiredHosts;
+      void this.plugin.saveSettings();
+    }
+    new Setting(container)
+      .setName("Hosts required before sync icon clears")
+      .setDesc("The note icon clears when the note is available on at least this many active devices or shards.")
+      .addDropdown((dropdown) => {
+        for (let count = 1; count <= Math.max(1, hostCount); count += 1) {
+          dropdown.addOption(String(count), String(count));
+        }
+        dropdown.setValue(String(requiredHosts)).onChange(async (value) => {
+          this.plugin.settings.noteSyncRequiredHosts = Math.min(Number(value), Math.max(1, activeMeshInstances(this.plugin.settings.instances).length));
+          await this.plugin.saveSettings();
+          this.plugin.restartNoteSyncPolling();
+        });
+      });
     new Setting(container)
       .setName("Delete Config")
       .setDesc("Erase Tephramesh's encrypted plugin data for this vault.")
@@ -697,7 +741,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
       );
       const activeInstances = activeMeshInstances(this.plugin.settings.instances);
       const operatingInstances = activeInstances.filter(
-        (instance) => this.plugin.runtimeStatuses.get(instance.id)?.ok,
+        (instance) => isRuntimeStatusFresh(
+          this.plugin.runtimeStatuses.get(instance.id),
+          this.plugin.settings.offlineTimeoutSeconds,
+        ),
       );
       const metricsFor = (instances: MeshInstance[]) => {
         const devices = instances.filter((item) => item.kind === "device").length;
@@ -731,6 +778,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       for (const runtimeState of meshRuntimeStates(
         this.plugin.settings.instances,
         this.plugin.runtimeStatuses,
+        this.plugin.settings.offlineTimeoutSeconds,
       )) {
         runtimeGroup.createSpan({
           cls: `tephramesh-topology-runtime is-${runtimeState}`,
@@ -802,7 +850,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     element: HTMLElement,
     status: InstanceRuntimeStatus | undefined,
   ): void {
-    const version = status?.ok ? status.version : undefined;
+    const version = isRuntimeStatusFresh(status, this.plugin.settings.offlineTimeoutSeconds) ? status?.version : undefined;
     element.setText(` · ${version ?? "—"}`);
   }
 
@@ -810,11 +858,12 @@ export class TephrameshSettingTab extends PluginSettingTab {
     button: ButtonComponent,
     status: InstanceRuntimeStatus | undefined,
   ): void {
-    const paused = Boolean(status?.folderPaused);
+    const fresh = isRuntimeStatusFresh(status, this.plugin.settings.offlineTimeoutSeconds);
+    const paused = Boolean(fresh && status?.folderPaused);
     button
       .setIcon(paused ? "play" : "pause")
       .setTooltip(paused ? "Resume managed folder" : "Pause managed folder")
-      .setDisabled(!status?.ok || !status.folder);
+      .setDisabled(!fresh || !status?.folder);
   }
 
   private updateStatusElement(
@@ -825,6 +874,15 @@ export class TephrameshSettingTab extends PluginSettingTab {
     element.removeClass("is-error", "is-scanning", "is-syncing", "is-paused");
     if (!status) {
       element.setText("Not checked yet");
+      return;
+    }
+    if (!isRuntimeStatusFresh(status, this.plugin.settings.offlineTimeoutSeconds)) {
+      if (status.ok) {
+        element.setText(`Unavailable: no successful status check in the last ${this.plugin.settings.offlineTimeoutSeconds} seconds`);
+      } else {
+        element.setText(`Unavailable: ${status.error ?? "Unknown error"}`);
+      }
+      element.addClass("is-error");
       return;
     }
     if (!status.ok) {

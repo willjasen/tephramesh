@@ -13,7 +13,7 @@ import {
   createMeshPlan,
   meshPeerPolicy,
 } from "./topology";
-import { pendingFolderPaths } from "./note-sync";
+import { pendingFolderPaths, pendingNotePathsForHostThreshold } from "./note-sync";
 import {
   inspectReconciliationSnapshot,
   repairBlockedReasons,
@@ -332,6 +332,12 @@ export default class TephrameshPlugin extends Plugin {
           : [],
         schemaVersion: 3,
       };
+      if (!Object.prototype.hasOwnProperty.call(protectedData.settings, "noteSyncRequiredHosts")) {
+        this.settings.noteSyncRequiredHosts = Math.max(
+          1,
+          this.settings.instances.filter((instance) => instance.kind === "shard").length + 1,
+        );
+      }
       this.settings.managedIgnoreRules = this.settings.managedIgnoreRules.filter(
         (line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()),
       );
@@ -884,11 +890,10 @@ export default class TephrameshPlugin extends Plugin {
                 client.getRemoteNeededFiles(this.settings.folderId, peer.deviceId),
               ),
           ]);
-          this.pendingNotePaths = new Set(
-            neededByPeer
-              .flat()
-              .map((path) => path.replaceAll("\\", "/"))
-              .filter((path) => path.toLowerCase().endsWith(".md")),
+          this.pendingNotePaths = pendingNotePathsForHostThreshold(
+            neededByPeer,
+            activeInstances.length,
+            this.settings.noteSyncRequiredHosts,
           );
           this.renderNoteSyncBadges();
           return;
