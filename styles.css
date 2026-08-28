@@ -63,6 +63,19 @@
   font-weight: var(--font-normal);
 }
 
+.tephramesh-instance-os {
+  display: none;
+  font-family: var(--font-interface);
+  font-size: 1.05em;
+  line-height: 1;
+  margin-left: 0.35em;
+  vertical-align: -0.04em;
+}
+
+.tephramesh-instance-os.is-visible {
+  display: inline-block;
+}
+
 .tephramesh-instance-kind {
   background: var(--interactive-accent);
   border-radius: 999px;

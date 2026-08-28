@@ -32,6 +32,7 @@ import { EditEndpointModal } from "./edit-endpoint-modal";
 import { MeshNotReadyError } from "./mesh-errors";
 import { DeleteConfigModal } from "./delete-config-modal";
 import { formatDataSize } from "./format";
+import { operatingSystemPresentation } from "./platform";
 
 type SettingsSection = "instances" | "vault" | "config" | "topology";
 
@@ -45,6 +46,7 @@ const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 export class TephrameshSettingTab extends PluginSettingTab {
   private statusElements = new Map<string, HTMLElement>();
   private versionElements = new Map<string, HTMLElement>();
+  private operatingSystemElements = new Map<string, HTMLElement>();
   private pauseButtons = new Map<string, ButtonComponent>();
   private topologyElement?: HTMLElement;
   private reconciliationElement?: HTMLElement;
@@ -80,6 +82,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     containerEl.addClass("tephramesh-settings");
     this.statusElements.clear();
     this.versionElements.clear();
+    this.operatingSystemElements.clear();
     this.pauseButtons.clear();
     this.topologyElement = undefined;
     this.reconciliationElement = undefined;
@@ -177,6 +180,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
     for (const [instanceId, element] of this.versionElements) {
       this.updateVersionElement(element, statuses.get(instanceId));
     }
+    for (const [instanceId, element] of this.operatingSystemElements) {
+      this.updateOperatingSystemElement(element, statuses.get(instanceId));
+    }
     for (const [instanceId, button] of this.pauseButtons) {
       this.updatePauseButton(button, statuses.get(instanceId));
     }
@@ -213,7 +219,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
                 result.discoveredFolder?.label || "Obsidian vault";
               this.plugin.settings.onboardingComplete = true;
               await this.plugin.saveSettings();
-              this.plugin.setKnownHealthy(result.instance.id, result.version);
+              this.plugin.setKnownHealthy(result.instance.id, result.version, result.operatingSystem);
               this.display();
               await this.plugin.refreshStatuses();
               showTephrameshNotice("success", "First device connected");
@@ -452,6 +458,14 @@ export class TephrameshSettingTab extends PluginSettingTab {
         cls: `tephramesh-instance-kind is-${instance.kind}`,
       });
       setting.nameEl.appendText(` ${instance.name}`);
+      const operatingSystem = setting.nameEl.createSpan({
+        cls: "tephramesh-instance-os",
+      });
+      this.operatingSystemElements.set(instance.id, operatingSystem);
+      this.updateOperatingSystemElement(
+        operatingSystem,
+        this.plugin.runtimeStatuses.get(instance.id),
+      );
       setting.nameEl.createSpan({
         text: ` · ${shortDeviceId(instance.deviceId)}`,
         cls: "tephramesh-instance-heading-meta",
@@ -639,13 +653,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
         }
         this.plugin.settings.instances.push(result.instance);
         await this.plugin.saveSettings();
-        this.plugin.setKnownHealthy(result.instance.id, result.version);
+        this.plugin.setKnownHealthy(result.instance.id, result.version, result.operatingSystem);
         this.display();
         await this.plugin.refreshStatuses();
       },
       async (result, apiKey) => {
         await this.plugin.savePendingInstance(result.instance, apiKey);
-        this.plugin.setKnownHealthy(result.instance.id, result.version);
+        this.plugin.setKnownHealthy(result.instance.id, result.version, result.operatingSystem);
         this.display();
       },
     ).open();
@@ -901,6 +915,25 @@ export class TephrameshSettingTab extends PluginSettingTab {
   ): void {
     const version = isRuntimeStatusFresh(status, this.plugin.settings.offlineTimeoutSeconds) ? status?.version : undefined;
     element.setText(` · ${version ?? "—"}`);
+  }
+
+  private updateOperatingSystemElement(
+    element: HTMLElement,
+    status: InstanceRuntimeStatus | undefined,
+  ): void {
+    const fresh = isRuntimeStatusFresh(status, this.plugin.settings.offlineTimeoutSeconds);
+    const presentation = fresh
+      ? operatingSystemPresentation(status?.operatingSystem)
+      : undefined;
+    element.toggleClass("is-visible", Boolean(presentation));
+    element.setText(presentation?.glyph ?? "");
+    if (presentation) {
+      element.setAttribute("aria-label", presentation.label);
+      element.setAttribute("title", presentation.label);
+    } else {
+      element.removeAttribute("aria-label");
+      element.removeAttribute("title");
+    }
   }
 
   private updatePauseButton(

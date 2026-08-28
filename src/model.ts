@@ -50,6 +50,7 @@ export interface SyncthingSystemStatus {
 export interface SyncthingVersion {
   version: string;
   longVersion?: string;
+  os?: string;
 }
 
 export interface SyncthingFolderDevice {
@@ -131,6 +132,7 @@ export interface InstanceRuntimeStatus {
   ok: boolean;
   error?: string;
   version?: string;
+  operatingSystem?: string;
   deviceId?: string;
   folder?: SyncthingFolderStatus;
   folderPaused?: boolean;

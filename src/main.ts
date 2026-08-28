@@ -1123,11 +1123,12 @@ export default class TephrameshPlugin extends Plugin {
     }
   }
 
-  setKnownHealthy(instanceId: string, version: string): void {
+  setKnownHealthy(instanceId: string, version: string, operatingSystem?: string): void {
     this.runtimeStatuses.set(instanceId, {
       checkedAt: Date.now(),
       ok: true,
       version,
+      operatingSystem,
     });
   }
 
@@ -1267,6 +1268,7 @@ export default class TephrameshPlugin extends Plugin {
         checkedAt,
         ok: true,
         version: version.version,
+        operatingSystem: version.os,
         deviceId: system.myID,
         folder,
         folderPaused: Boolean(folderConfig?.paused),

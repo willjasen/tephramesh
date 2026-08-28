@@ -32,6 +32,7 @@ export interface InstanceDiscovery {
   instance: MeshInstance;
   discoveredFolder?: { id: string; label: string };
   version: string;
+  operatingSystem?: string;
 }
 
 interface InspectionResult {
@@ -451,6 +452,7 @@ export class InstanceModal extends Modal {
           ? { id: matchingFolder.id, label: matchingFolder.label }
           : undefined,
         version: version.version,
+        operatingSystem: version.os,
       },
     };
   }
