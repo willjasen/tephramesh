@@ -20,7 +20,6 @@ import {
   isRuntimeStatusFresh,
   meshRuntimeStates,
   topologyHealthState,
-  unavailableInstancesSummary,
 } from "./topology";
 import { InstanceModal } from "./instance-modal";
 import { showTephrameshNotice } from "./notices";
@@ -37,13 +36,14 @@ import { operatingSystemPresentation } from "./platform";
 import { RestoreConfigVersionModal } from "./restore-config-version-modal";
 import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
 
-type SettingsSection = "instances" | "vault" | "config" | "topology";
+type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology";
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "topology", label: "Topology" },
   { id: "instances", label: "Instances" },
   { id: "vault", label: "Vault" },
   { id: "config", label: "Config" },
+  { id: "auth", label: "Auth" },
 ];
 
 export class TephrameshSettingTab extends PluginSettingTab {
@@ -240,7 +240,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private renderSectionTabs(container: HTMLElement): void {
     const enrollmentRequired =
       this.plugin.getSigningEnvironmentStatus().state === "approval-required";
-    if (enrollmentRequired) this.activeSection = "config";
+    if (enrollmentRequired) this.activeSection = "auth";
     const tabs = container.createDiv({ cls: "tephramesh-tabs" });
     tabs.setAttribute("role", "tablist");
     for (const section of SETTINGS_SECTIONS) {
@@ -251,7 +251,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", String(active));
-      const disabled = enrollmentRequired && section.id !== "config";
+      const disabled = enrollmentRequired && section.id !== "auth";
       button.disabled = disabled;
       button.setAttribute("aria-disabled", String(disabled));
       button.addEventListener("click", () => {
@@ -277,6 +277,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
         break;
       case "config":
         this.renderConfig(sectionContainer);
+        break;
+      case "auth":
+        this.renderAuth(sectionContainer);
         break;
       case "topology":
         this.renderTopology(sectionContainer);
@@ -400,11 +403,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderConfig(container: HTMLElement): void {
-    const signingState = this.renderSigningEnvironment(container);
-    if (signingState === "approval-required") {
-      this.renderDeleteConfig(container);
-      return;
-    }
     container.createEl("h2", { text: "Config history" });
     container.createEl("p", {
       text: "Inspect saved encrypted snapshots or restore an earlier version. Decrypted views include API keys and the shard encryption key; keep this screen private.",
@@ -484,6 +482,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
     const pre = container.createEl("pre", { cls: "tephramesh-config-json" });
     pre.createEl("code").setText(JSON.stringify(config, null, 2));
     this.renderDeleteConfig(container);
+  }
+
+  private renderAuth(container: HTMLElement): void {
+    const signingState = this.renderSigningEnvironment(container);
+    if (signingState === "approval-required") {
+      this.renderDeleteConfig(container);
+    }
   }
 
   private renderSigningEnvironment(
@@ -829,8 +834,21 @@ export class TephrameshSettingTab extends PluginSettingTab {
     const orderedInstances = [...this.plugin.settings.instances].sort(
       (a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0),
     );
-    orderedInstances.forEach((instance, index) => {
-      const setting = new Setting(container);
+    const instanceGroups: Array<{ kind: InstanceKind; label: string }> = [
+      { kind: "device", label: "Devices" },
+      { kind: "shard", label: "Shards" },
+    ];
+    let hasRenderedSection = false;
+    for (const group of instanceGroups) {
+      const instances = orderedInstances.filter((instance) => instance.kind === group.kind);
+      if (instances.length === 0) continue;
+      const section = container.createDiv({ cls: "tephramesh-instance-section" });
+      if (hasRenderedSection) section.addClass("has-divider");
+      hasRenderedSection = true;
+      section.createEl("h3", { text: group.label, cls: "tephramesh-instance-section-heading" });
+      instances.forEach((instance) => {
+        const index = orderedInstances.indexOf(instance);
+        const setting = new Setting(section);
       setting.settingEl.addClass("tephramesh-instance-card");
       setting.settingEl.dataset.instanceId = instance.id;
       const dragHandle = document.createElement("span");
@@ -866,10 +884,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       setting.nameEl.empty();
       setting.nameEl.prepend(dragHandle);
-      setting.nameEl.createSpan({
-        text: instance.kind === "shard" ? "Shard" : "Device",
-        cls: `tephramesh-instance-kind is-${instance.kind}`,
-      });
       setting.nameEl.appendText(` ${instance.name}`);
       const operatingSystem = setting.nameEl.createSpan({
         cls: "tephramesh-instance-os",
@@ -1016,12 +1030,16 @@ export class TephrameshSettingTab extends PluginSettingTab {
             }),
         );
       }
-    });
-    for (const known of this.plugin.settings.knownDevices) {
-      const setting = new Setting(container);
+      });
+    }
+    if (this.plugin.settings.knownDevices.length > 0) {
+      const knownSection = container.createDiv({ cls: "tephramesh-instance-section" });
+      if (hasRenderedSection) knownSection.addClass("has-divider");
+      knownSection.createEl("h3", { text: "Known", cls: "tephramesh-instance-section-heading" });
+      for (const known of this.plugin.settings.knownDevices) {
+      const setting = new Setting(knownSection);
       setting.settingEl.addClass("tephramesh-instance-card");
       setting.nameEl.empty();
-      setting.nameEl.createSpan({ text: "Known", cls: "tephramesh-instance-kind is-known" });
       setting.nameEl.appendText(` ${known.name}`);
       setting.nameEl.createSpan({ text: ` · ${shortDeviceId(known.deviceId)}`, cls: "tephramesh-instance-heading-meta" });
       setting.descEl.setText("A trusted Syncthing peer outside the Tephramesh mesh.");
@@ -1042,6 +1060,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
             }).open();
           }),
       );
+      }
     }
   }
 
@@ -1251,21 +1270,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const operatingHeading = operatingSection.createDiv({ cls: "tephramesh-topology-heading" });
       const operatingTitle = operatingHeading.createDiv({ cls: "tephramesh-topology-title" });
       operatingTitle.createEl("h3", { text: "Operating now" });
-      operatingTitle.createDiv({
-        cls: "tephramesh-topology-subtitle",
-        text: operatingInstances.length === activeInstances.length
-          ? "Reachable instances currently participating in the mesh."
-          : unavailableInstancesSummary(activeInstances, operatingInstances),
-      });
+      const runtimeGroup = operatingTitle.createDiv({ cls: "tephramesh-topology-runtime-group" });
       const status = operatingHeading.createDiv({
         cls: "tephramesh-topology-status",
       });
       status.createSpan({ cls: `tephramesh-topology-indicator is-${healthState}` });
       const statusText = status.createDiv();
       statusText.createEl("strong", { text: healthState === "healthy" ? "Healthy" : "Warning" });
-      const runtimeGroup = operatingSection.createDiv({
-        cls: "tephramesh-topology-runtime-group",
-      });
       for (const runtimeState of meshRuntimeStates(
         this.plugin.settings.instances,
         this.plugin.runtimeStatuses,

@@ -58,6 +58,20 @@
   padding-top: var(--size-4-6);
 }
 
+.tephramesh-instance-section {
+  margin-top: 1.25em;
+}
+
+.tephramesh-instance-section.has-divider {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 1.25em;
+}
+
+.tephramesh-instance-section-heading {
+  margin: 0 0 0.5em;
+  font-size: var(--font-ui-medium);
+}
+
 .tephramesh-instance-drag-handle {
   color: var(--text-muted);
   cursor: grab;
@@ -263,7 +277,7 @@ button.tephramesh-pending-button {
 }
 
 .tephramesh-topology-title {
-  align-items: baseline;
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: var(--size-4-2);
@@ -331,7 +345,6 @@ button.tephramesh-pending-button {
   display: flex;
   flex-wrap: wrap;
   gap: var(--size-4-2);
-  margin-left: auto;
 }
 
 .tephramesh-topology-runtime {
