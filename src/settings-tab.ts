@@ -243,7 +243,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
     if (enrollmentRequired) this.activeSection = "auth";
     const tabs = container.createDiv({ cls: "tephramesh-tabs" });
     tabs.setAttribute("role", "tablist");
-    for (const section of SETTINGS_SECTIONS) {
+    const visibleSections = enrollmentRequired
+      ? SETTINGS_SECTIONS.filter((section) => section.id === "auth")
+      : SETTINGS_SECTIONS;
+    for (const section of visibleSections) {
       const active = section.id === this.activeSection;
       const button = tabs.createEl("button", {
         text: section.label,
@@ -251,11 +254,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", String(active));
-      const disabled = enrollmentRequired && section.id !== "auth";
-      button.disabled = disabled;
-      button.setAttribute("aria-disabled", String(disabled));
       button.addEventListener("click", () => {
-        if (disabled) return;
         if (this.activeSection === section.id) return;
         if (this.activeSection === "config") {
           this.configRevealed = false;
@@ -1022,7 +1021,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
             }),
         );
       }
-      });
+        });
+      }
     }
     if (this.plugin.settings.knownDevices.length > 0) {
       const knownSection = container.createDiv({ cls: "tephramesh-instance-section" });
