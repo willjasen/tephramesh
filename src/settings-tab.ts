@@ -43,7 +43,7 @@ const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "instances", label: "Instances" },
   { id: "vault", label: "Vault" },
   { id: "config", label: "Config" },
-  { id: "auth", label: "Auth" },
+  { id: "auth", label: "Signing" },
 ];
 
 export class TephrameshSettingTab extends PluginSettingTab {
