@@ -88,13 +88,13 @@ export default class TephrameshPlugin extends Plugin {
    * every polling tick.
    */
   private instanceStatusChecks = new Map<string, Promise<boolean>>();
-  private nextNameRefreshAt = 0;
+  private nextInstanceMetadataRefreshAt = 0;
   private nextReconciliationAt = 0;
   private reconciliationInProgress = false;
   private reconciliationChecks = new Map<string, Promise<InstanceReconciliationSnapshot>>();
   private folderLabelSyncTimer?: number;
   private folderLabelSyncQueue: Promise<void> = Promise.resolve();
-  private static readonly NAME_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+  private static readonly INSTANCE_METADATA_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
   private static readonly RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
   private static readonly LABEL_SYNC_DEBOUNCE_MS = 750;
 
@@ -1207,9 +1207,9 @@ export default class TephrameshPlugin extends Plugin {
     this.refreshInProgress = true;
     try {
       const now = Date.now();
-      const checkNames = forceNameCheck || now >= this.nextNameRefreshAt;
-      if (checkNames) {
-        this.nextNameRefreshAt = now + TephrameshPlugin.NAME_REFRESH_INTERVAL_MS;
+      const checkMetadata = forceNameCheck || now >= this.nextInstanceMetadataRefreshAt;
+      if (checkMetadata) {
+        this.nextInstanceMetadataRefreshAt = now + TephrameshPlugin.INSTANCE_METADATA_REFRESH_INTERVAL_MS;
       }
       const nameChanges = await Promise.all(
         this.settings.instances.map(async (instance) => {
@@ -1218,7 +1218,7 @@ export default class TephrameshPlugin extends Plugin {
           try {
             let check = this.instanceStatusChecks.get(instance.id);
             if (!check) {
-              check = this.refreshInstanceStatus(instance, false, checkNames).finally(() => {
+              check = this.refreshInstanceStatus(instance, false, checkMetadata).finally(() => {
                 if (this.instanceStatusChecks.get(instance.id) === check) {
                   this.instanceStatusChecks.delete(instance.id);
                 }
@@ -1270,7 +1270,7 @@ export default class TephrameshPlugin extends Plugin {
   async refreshInstanceStatus(
     instance: MeshInstance,
     render = true,
-    checkName = true,
+    checkMetadata = true,
   ): Promise<boolean> {
     let nameChanged = false;
     try {
@@ -1280,14 +1280,17 @@ export default class TephrameshPlugin extends Plugin {
       // Obsidian's requestUrl uses Electron's shared Chromium network stack.
       // Keep each host to one request at a time so polling several instances
       // cannot create a large simultaneous socket burst.
-      const system = await client.getSystemStatus();
-      const version = await client.getVersion();
       const connections = await client.getConnections();
       const initialFolderStatus = this.settings.folderId
         ? await client.getFolderStatus(this.settings.folderId).catch(() => undefined)
         : undefined;
-      const devices = checkName ? await client.getDevices() : undefined;
-      const folderConfig = instance.setupState !== "pending" && this.settings.folderId
+      // Identity, version, device-name, and folder configuration change rarely.
+      // Fetch them together on the five-minute metadata cadence instead of on
+      // every runtime polling tick.
+      const system = checkMetadata ? await client.getSystemStatus() : undefined;
+      const version = checkMetadata ? await client.getVersion() : undefined;
+      const devices = checkMetadata ? await client.getDevices() : undefined;
+      const folderConfig = checkMetadata && instance.setupState !== "pending" && this.settings.folderId
         ? await client.getFolder(this.settings.folderId).catch(() => undefined)
         : undefined;
       const reportedPullOrder = folderConfig?.order;
@@ -1320,10 +1323,10 @@ export default class TephrameshPlugin extends Plugin {
           ? await client.getLocalNeededFiles(this.settings.folderId)
               .catch(() => undefined)
           : undefined;
-      if (system.myID !== instance.deviceId) {
+      if (system && system.myID !== instance.deviceId) {
         throw new Error("API now reports a different Syncthing device ID");
       }
-      if (devices) {
+      if (devices && system) {
         const currentName = localSyncthingDeviceName(devices, system.myID);
         if (!currentName) {
           throw new Error("Syncthing did not report a name for its local device");
@@ -1349,14 +1352,15 @@ export default class TephrameshPlugin extends Plugin {
         this.runtimeStatuses.get(instance.id)?.traffic,
         traffic,
       );
+      const previous = this.runtimeStatuses.get(instance.id);
       this.runtimeStatuses.set(instance.id, {
         checkedAt,
         ok: true,
-        version: version.version,
-        operatingSystem: version.os,
-        deviceId: system.myID,
+        version: version?.version ?? previous?.version,
+        operatingSystem: version?.os ?? previous?.operatingSystem,
+        deviceId: system?.myID ?? previous?.deviceId ?? instance.deviceId,
         folder,
-        folderPaused: Boolean(folderConfig?.paused),
+        folderPaused: folderConfig ? Boolean(folderConfig.paused) : previous?.folderPaused,
         pendingFiles,
         traffic,
         ...rates,
