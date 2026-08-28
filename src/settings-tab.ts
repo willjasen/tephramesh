@@ -223,7 +223,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
               this.plugin.settings.folderLabel =
                 result.discoveredFolder?.label || "Obsidian vault";
               this.plugin.settings.onboardingComplete = true;
-              await this.plugin.saveSettings();
+              await this.plugin.initializeSigningEnvironment(`mesh:${result.instance.id}`);
               this.plugin.setKnownHealthy(result.instance.id, result.version, result.operatingSystem);
               this.display();
               await this.plugin.refreshStatuses();
