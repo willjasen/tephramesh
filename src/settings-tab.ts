@@ -422,7 +422,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       new Setting(container)
         .setName("View decrypted configuration")
         .setDesc("The view includes API keys and the shard encryption key; keep it private.")
-        .addButton((button) => button.setButtonText("Show config").onClick(() => {
+        .addButton((button) => button.setButtonText("Show Running Config").onClick(() => {
           this.configRevealed = true;
           this.render();
         }));
