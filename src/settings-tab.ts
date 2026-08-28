@@ -677,7 +677,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
       text: `Enrolled as ${status.localInstallationName ?? "this installation"}`,
       cls: "tephramesh-enrolled-status",
     });
-    container.createEl("h3", { text: "Authenticated installations" });
     const authenticatedList = container.createDiv({
       cls: "tephramesh-authenticated-list",
     });
