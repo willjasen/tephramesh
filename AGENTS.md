@@ -108,3 +108,4 @@ Tephramesh is an Obsidian plugin that manages a dedicated Syncthing mesh for exa
 - `./test.sh clear` removes only the testing vault's Tephramesh `data.json`, then automatically performs the build/deploy flow. It cannot remove the local `tephramesh-age-identity` Keychain entry.
 - Default testing destination: `/Users/willjasen/AppData/Syncthing/Notebox/.obsidian/plugins/tephramesh`. Override with `TEPHRAMESH_TEST_PLUGIN_DIR`.
 - Preserve unrelated user changes and do not delete or rewrite existing configuration without an explicit migration or request.
+- The add-device dialog's **Cancel** action uses the red error color to distinguish dismissal from the setup actions.

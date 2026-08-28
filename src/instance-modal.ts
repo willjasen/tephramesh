@@ -206,7 +206,10 @@ export class InstanceModal extends Modal {
 
     const actions = new Setting(contentEl);
     actions.addButton((button) =>
-      button.setButtonText("Cancel").onClick(() => this.close()),
+      button
+        .setButtonText("Cancel")
+        .setClass("tephramesh-cancel-button")
+        .onClick(() => this.close()),
     );
     actions.addButton((button) => {
       this.testButton = button;

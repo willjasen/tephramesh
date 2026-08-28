@@ -382,6 +382,15 @@ button.tephramesh-pending-button {
   min-width: 16rem;
 }
 
+.tephramesh-instance-modal .tephramesh-cancel-button {
+  color: var(--text-error);
+}
+
+.tephramesh-instance-modal .tephramesh-cancel-button:hover {
+  color: var(--text-error);
+  background-color: var(--background-modifier-error-hover);
+}
+
 .tephramesh-notice-title {
   display: block;
   font-weight: var(--font-semibold);
