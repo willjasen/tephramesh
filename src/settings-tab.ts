@@ -387,22 +387,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
           this.plugin.restartNoteSyncPolling();
         });
       });
-    new Setting(container)
-      .setName("Delete Config")
-      .setDesc("Erase Tephramesh's encrypted plugin data for this vault.")
-      .addButton((button) =>
-        button.setButtonText("Delete Config").setWarning().onClick(() => {
-          new DeleteConfigModal(this.app, async () => {
-            await this.plugin.deleteConfig();
-            this.display();
-            showTephrameshNotice(
-              "success",
-              "Config deleted",
-              "Tephramesh is ready for initial setup. Syncthing and vault files were not changed.",
-            );
-          }).open();
-        }),
-      );
   }
 
   private renderConfig(container: HTMLElement): void {
@@ -426,57 +410,84 @@ export class TephrameshSettingTab extends PluginSettingTab {
           this.plugin.settings.configHistoryVersions = count;
           await this.plugin.saveSettings();
         });
-      });
+    });
     const history = this.plugin.getConfigHistory();
     const currentVersion = history[0]?.version;
-    const historyContainer = container.createDiv({ cls: "tephramesh-config-history" });
-    for (const block of history) {
-      const savedAt = new Date(block.savedAt);
-      const dateLabel = Number.isNaN(savedAt.getTime()) ? block.savedAt : savedAt.toLocaleString();
-      const setting = new Setting(historyContainer)
-        .setName(`Version ${block.version}${block.version === currentVersion ? " · Current" : ""}`)
-        .setDesc(dateLabel);
-      setting.addButton((button) => button.setButtonText("View").onClick(() => {
-        this.selectedConfigVersion = block.version;
-        this.configRevealed = true;
-        this.render();
-      }));
-      if (block.version !== currentVersion) {
-        setting.addButton((button) => button.setButtonText("Restore").setWarning().onClick(() => {
-          new RestoreConfigVersionModal(this.app, block.version, async () => {
-            await this.plugin.restoreConfigVersion(block.version);
-            this.selectedConfigVersion = undefined;
-            this.configRevealed = false;
-            this.display();
-            showTephrameshNotice("success", "Config version restored", `Version ${block.version} is now the running configuration and was saved as a new latest version.`);
-          }).open();
-        }));
-      }
-    }
     if (history.length === 0) {
-      historyContainer.createEl("p", { text: "No saved config versions are available." });
-    }
-
-    if (!this.configRevealed) {
-      new Setting(container)
-        .setName("View decrypted configuration")
-        .setDesc("The view includes API keys and the shard encryption key; keep it private.")
-        .addButton((button) => button.setButtonText("Show Running Config").onClick(() => {
-          this.selectedConfigVersion = currentVersion;
-          this.configRevealed = true;
-          this.render();
-        }));
+      container.createEl("p", { text: "No saved config versions are available." });
+      this.renderDeleteConfig(container);
       return;
     }
-    const selectedBlock = history.find((block) => block.version === this.selectedConfigVersion);
-    const config = selectedBlock?.config ?? this.plugin.getDecryptedConfig();
+    const selectedVersion = this.selectedConfigVersion ?? currentVersion;
+    const selectedBlock = history.find((block) => block.version === selectedVersion) ?? history[0]!;
+    this.selectedConfigVersion = selectedBlock.version;
+    new Setting(container)
+      .setName("Config version")
+      .setDesc("Select a saved version to view its decrypted configuration. Keep this screen private.")
+      .addDropdown((dropdown) => {
+        for (const block of history) {
+          const savedAt = new Date(block.savedAt);
+          const dateLabel = Number.isNaN(savedAt.getTime()) ? block.savedAt : savedAt.toLocaleString();
+          dropdown.addOption(String(block.version), `Version ${block.version}${block.version === currentVersion ? " · Current" : ""} · ${dateLabel}`);
+        }
+        dropdown.setValue(String(selectedBlock.version)).onChange((value) => {
+          this.selectedConfigVersion = Number(value);
+          this.configRevealed = true;
+          this.render();
+        });
+      })
+      .addButton((button) => {
+        if (!this.configRevealed) {
+          button.setButtonText("Display").onClick(() => {
+            this.configRevealed = true;
+            this.render();
+          });
+          return;
+        }
+        button.setButtonText("Restore").setWarning();
+        button.setDisabled(selectedBlock.version === currentVersion);
+        button.onClick(() => new RestoreConfigVersionModal(this.app, selectedBlock.version, async () => {
+          await this.plugin.restoreConfigVersion(selectedBlock.version);
+          this.selectedConfigVersion = undefined;
+          this.configRevealed = false;
+          this.display();
+          showTephrameshNotice("success", "Config version restored", `Version ${selectedBlock.version} is now the running configuration and was saved as a new latest version.`);
+        }).open());
+      });
+
+    if (!this.configRevealed) {
+      this.renderDeleteConfig(container);
+      return;
+    }
+    const config = selectedBlock.config ?? this.plugin.getDecryptedConfig();
     if (!config) {
       container.createEl("p", { text: "Unlock Tephramesh to view the decrypted configuration." });
+      this.renderDeleteConfig(container);
       return;
     }
     container.createEl("h3", { text: selectedBlock ? `Decrypted config version ${selectedBlock.version}` : "Decrypted running config" });
     const pre = container.createEl("pre", { cls: "tephramesh-config-json" });
     pre.createEl("code").setText(JSON.stringify(config, null, 2));
+    this.renderDeleteConfig(container);
+  }
+
+  private renderDeleteConfig(container: HTMLElement): void {
+    new Setting(container)
+      .setName("Delete Config")
+      .setDesc("Erase Tephramesh's encrypted plugin data for this vault.")
+      .addButton((button) =>
+        button.setButtonText("Delete Config").setWarning().onClick(() => {
+          new DeleteConfigModal(this.app, async () => {
+            await this.plugin.deleteConfig();
+            this.display();
+            showTephrameshNotice(
+              "success",
+              "Config deleted",
+              "Tephramesh is ready for initial setup. Syncthing and vault files were not changed.",
+            );
+          }).open();
+        }),
+      );
   }
 
   private renderInstances(container: HTMLElement): void {
