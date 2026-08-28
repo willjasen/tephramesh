@@ -9,6 +9,7 @@ set -euo pipefail
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="${TEPHRAMESH_TEST_PLUGIN_DIR:-/Users/willjasen/AppData/Syncthing/Notebox/.obsidian/plugins/tephramesh}"
 PLUGIN_DIR="${PLUGIN_DIR%/}"
+OBSIDIAN_CLI="${OBSIDIAN_CLI:-/Applications/Obsidian.app/Contents/MacOS/obsidian-cli}"
 FILES=("main.js" "manifest.json" "styles.css")
 
 usage() {
@@ -50,7 +51,14 @@ build_plugin() {
   done
 
   echo "Tephramesh was copied to: $PLUGIN_DIR"
-  echo "Reload Obsidian, or disable and re-enable Tephramesh, to load the new build."
+  if [[ ! -x "$OBSIDIAN_CLI" ]]; then
+    echo "Obsidian CLI was not found or is not executable: $OBSIDIAN_CLI" >&2
+    exit 1
+  fi
+  echo "Reloading Tephramesh in the Notebox vault..."
+  "$OBSIDIAN_CLI" vault=Notebox plugin:disable id=tephramesh filter=community
+  "$OBSIDIAN_CLI" vault=Notebox plugin:enable id=tephramesh filter=community
+  echo "Tephramesh was disabled and re-enabled in the Notebox vault."
 }
 
 clear_config() {
