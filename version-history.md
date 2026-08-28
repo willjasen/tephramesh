@@ -6,6 +6,9 @@
  - show the global folder size
  - show a logo of the operating system of the syncthing instance
  - fix for shard trust setting
+ - have the test/build script automatically refresh the local plugin
+ - fix display issues on the topology screen
+ - allow reording of syncthing hosts under the "Instances" tab
 
 ---
 
