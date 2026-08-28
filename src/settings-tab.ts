@@ -819,7 +819,14 @@ export class TephrameshSettingTab extends PluginSettingTab {
 
       const operatingSection = this.topologyElement.createDiv({ cls: "tephramesh-topology-section tephramesh-topology-operating" });
       const operatingHeading = operatingSection.createDiv({ cls: "tephramesh-topology-heading" });
-      operatingHeading.createEl("h3", { text: "Operating now" });
+      const operatingTitle = operatingHeading.createDiv({ cls: "tephramesh-topology-title" });
+      operatingTitle.createEl("h3", { text: "Operating now" });
+      operatingTitle.createDiv({
+        cls: "tephramesh-topology-subtitle",
+        text: operatingInstances.length === activeInstances.length
+          ? "Reachable instances currently participating in the mesh."
+          : unavailableInstancesSummary(activeInstances, operatingInstances),
+      });
       const status = operatingHeading.createDiv({
         cls: "tephramesh-topology-status",
       });
@@ -840,12 +847,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
           text: runtimeState,
         });
       }
-      operatingSection.createDiv({
-        cls: "tephramesh-topology-subtitle",
-        text: operatingInstances.length === activeInstances.length
-          ? "Reachable instances currently participating in the mesh."
-          : unavailableInstancesSummary(activeInstances, operatingInstances),
-      });
       const operatingMetrics = operatingSection.createDiv({ cls: "tephramesh-topology-metrics" });
       const globalSize = formatDataSize(operating.globalBytes) ?? "—";
       for (const { label, value, role, online } of [

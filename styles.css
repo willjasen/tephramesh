@@ -169,7 +169,19 @@ button.tephramesh-pending-button {
 .tephramesh-topology-heading {
   align-items: center;
   display: flex;
+  gap: var(--size-4-3);
   justify-content: space-between;
+}
+
+.tephramesh-topology-title {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+}
+
+.tephramesh-topology-title .tephramesh-topology-subtitle {
+  margin-top: 0;
 }
 
 .tephramesh-topology-operating .tephramesh-topology-metrics {
