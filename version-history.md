@@ -2,13 +2,15 @@
 
 ## 0.3.0 (beta)
 
- - add configurable note sync host threshold
  - show the global folder size
- - show a logo of the operating system of the syncthing instance
- - fix for shard trust setting
- - have the test/build script automatically refresh the local plugin
- - fix display issues on the topology screen
+ - show a logo of the operating system for each syncthing instance
  - allow reording of syncthing hosts under the "Instances" tab
+ - allow deletion of a known instance
+ - add configurable note sync host threshold
+
+- have the test/build script automatically refresh the local plugin
+ - fix display issues for the topology screen
+ - fix for shard trust setting
 
 ---
 
