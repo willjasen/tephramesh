@@ -880,9 +880,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const encrypted = details.createDiv({ cls: "tephramesh-topology-detail" });
       encrypted.createEl("strong", { text: "Shards" });
       encrypted.createSpan({ text: "Receive Encrypted · ciphertext at rest" });
-      details.createEl("p", {
-        text: "All peer connections remain encrypted in transit by Syncthing.",
-      });
     } catch (error) {
       this.topologyElement.addClass("is-incomplete");
       const status = this.topologyElement.createDiv({
