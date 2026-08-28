@@ -165,7 +165,11 @@ export default class TephrameshPlugin extends Plugin {
     if (!this.secrets || !this.settings.ageRecipient) {
       throw new Error("Unlock Tephramesh encryption before saving settings.");
     }
-    const { ageRecipient, ...protectedSettings } = this.settings;
+    const {
+      ageRecipient,
+      schemaVersion: _envelopeSchemaVersion,
+      ...protectedSettings
+    } = this.settings;
     const protectedData = {
       schemaVersion: 1,
       settings: protectedSettings,
@@ -239,10 +243,16 @@ export default class TephrameshPlugin extends Plugin {
     return this.secrets?.shardEncryptionKey || null;
   }
 
-  getDecryptedConfig(): { settings: TephrameshSettings; secrets: TephrameshSecrets } | null {
+  getDecryptedConfig(): TephrameshProtectedData | null {
     if (!this.secrets) return null;
+    const {
+      ageRecipient: _ageRecipient,
+      schemaVersion: _envelopeSchemaVersion,
+      ...settings
+    } = this.settings;
     return {
-      settings: structuredClone(this.settings),
+      schemaVersion: 1,
+      settings: structuredClone(settings),
       secrets: structuredClone(this.secrets),
     };
   }
@@ -390,7 +400,16 @@ export default class TephrameshPlugin extends Plugin {
             !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()),
         );
       }
-      this.secrets = protectedData.secrets;
+      this.secrets = {
+        apiKeys: Object.fromEntries(
+          Object.entries(protectedData.secrets.apiKeys ?? {}).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        ),
+        shardEncryptionKey: typeof protectedData.secrets.shardEncryptionKey === "string"
+          ? protectedData.secrets.shardEncryptionKey
+          : "",
+      };
       return;
     }
     this.secrets = await decryptSecrets(identity, this.encryptedData);

@@ -9,19 +9,18 @@ import type { TephrameshSettings } from "./model";
 export const AGE_IDENTITY_SECRET_NAME = "tephramesh-age-identity";
 
 export interface TephrameshSecrets {
-  schemaVersion: 1;
   apiKeys: Record<string, string>;
   shardEncryptionKey: string;
 }
 
 export interface TephrameshProtectedData {
   schemaVersion: 1;
-  settings: Omit<TephrameshSettings, "ageRecipient">;
+  settings: Omit<TephrameshSettings, "ageRecipient" | "schemaVersion">;
   secrets: TephrameshSecrets;
 }
 
 export function emptySecrets(): TephrameshSecrets {
-  return { schemaVersion: 1, apiKeys: {}, shardEncryptionKey: "" };
+  return { apiKeys: {}, shardEncryptionKey: "" };
 }
 
 export async function generatePostQuantumAgeKeyPair(): Promise<{
@@ -73,7 +72,7 @@ export async function encryptSecrets(
 ): Promise<string> {
   const encrypter = new Encrypter();
   encrypter.addRecipient(recipient.trim());
-  return bytesToBase64(await encrypter.encrypt(JSON.stringify(secrets)));
+  return bytesToBase64(await encrypter.encrypt(JSON.stringify({ schemaVersion: 1, ...secrets })));
 }
 
 export async function decryptSecrets(
@@ -85,7 +84,6 @@ export async function decryptSecrets(
   const plaintext = await decrypter.decrypt(base64ToBytes(ciphertext), "text");
   const parsed = JSON.parse(plaintext) as Partial<TephrameshSecrets>;
   if (
-    parsed.schemaVersion !== 1 ||
     !parsed.apiKeys ||
     typeof parsed.apiKeys !== "object" ||
     typeof parsed.shardEncryptionKey !== "string"
@@ -93,7 +91,6 @@ export async function decryptSecrets(
     throw new Error("The decrypted Tephramesh secret bundle is invalid.");
   }
   return {
-    schemaVersion: 1,
     apiKeys: Object.fromEntries(
       Object.entries(parsed.apiKeys).filter(
         (entry): entry is [string, string] => typeof entry[1] === "string",

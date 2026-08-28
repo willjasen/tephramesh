@@ -9,7 +9,10 @@ import { emptySecrets } from "../src/secret-bundle";
 
 const config = {
   schemaVersion: 1 as const,
-  settings: { ...structuredClone(DEFAULT_SETTINGS), ageRecipient: undefined } as never,
+  settings: (() => {
+    const { ageRecipient: _ageRecipient, schemaVersion: _envelopeSchemaVersion, ...settings } = structuredClone(DEFAULT_SETTINGS);
+    return settings;
+  })(),
   secrets: emptySecrets(),
 };
 

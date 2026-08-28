@@ -58,7 +58,7 @@ describe("age-encrypted secret bundle", () => {
   });
 
   it("encrypts all operational settings together with the secrets", async () => {
-    const { ageRecipient: _ageRecipient, ...settings } = {
+    const { ageRecipient: _ageRecipient, schemaVersion: _envelopeSchemaVersion, ...settings } = {
       ...structuredClone(DEFAULT_SETTINGS),
       ageRecipient: recipient,
       onboardingComplete: true,
@@ -76,5 +76,6 @@ describe("age-encrypted secret bundle", () => {
     await expect(decryptProtectedData(identity, encrypted)).resolves.toEqual(
       protectedData,
     );
+    expect(protectedData.settings).not.toHaveProperty("schemaVersion");
   });
 });
