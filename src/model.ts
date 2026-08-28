@@ -78,7 +78,8 @@ export interface SyncthingDevice {
   skipIntroductionRemovals?: boolean;
   paused?: boolean;
   autoAcceptFolders?: boolean;
-  untrusted: boolean;
+  /** Undefined means Tephramesh deliberately leaves Syncthing's trust choice unchanged. */
+  untrusted?: boolean;
   [key: string]: unknown;
 }
 

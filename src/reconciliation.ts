@@ -123,7 +123,7 @@ export function inspectReconciliationSnapshot(
         issue(snapshot, `Peer device “${peer.name}” is missing.`, true),
       );
     } else {
-      if (configuredPeer.untrusted !== policy.untrusted) {
+      if (policy.untrusted !== undefined && configuredPeer.untrusted !== policy.untrusted) {
         issues.push(
           issue(snapshot, `Peer trust for “${peer.name}” is incorrect.`, true),
         );

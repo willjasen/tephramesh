@@ -4,14 +4,14 @@
 
 Tephramesh manages one Syncthing folder ID per Obsidian vault.
 
-| Local instance | Remote instance | Remote marked untrusted | Folder password on share | Local folder type |
+| Local instance | Remote instance | Peer trust | Folder password on share | Local folder type |
 | --- | --- | --- | --- | --- |
-| Device | Device | No | Empty | Send & Receive |
-| Device | Shard | No | Shard encryption key | Send & Receive |
-| Shard | Device | No | Empty | Receive Encrypted |
-| Shard | Shard | No | Empty | Receive Encrypted |
+| Device | Device | Trusted (managed) | Empty | Send & Receive |
+| Device | Shard | Unchanged (unmanaged) | Shard encryption key | Send & Receive |
+| Shard | Device | Unchanged (unmanaged) | Empty | Receive Encrypted |
+| Shard | Shard | Unchanged (unmanaged) | Empty | Receive Encrypted |
 
-The shard encryption key belongs only on devices. A shard stores and exchanges the encrypted representation without learning the key. Tephramesh keeps every Syncthing device record trusted, including shard records, while attaching the shard encryption key only to device-to-shard folder shares.
+The shard encryption key belongs only on devices. A shard stores and exchanges the encrypted representation without learning the key. Because a shard may also host ordinary folders, Tephramesh never sets or audits Syncthing peer trust for a relationship involving a shard; it attaches the shard encryption key only to device-to-shard folder shares.
 
 API keys are administrative credentials. Tephramesh stores its entire operational state and secrets in one versioned age-encrypted payload. New configurations generate a dedicated hybrid ML-KEM-768 + X25519 age identity locally; classic and post-quantum native age identities can also be imported. The plaintext envelope contains only `schemaVersion`, the public recipient, and Base64 ciphertext. Each Obsidian installation stores the matching private identity locally in Keychain under `tephramesh-age-identity`. A copied `data.json` reveals neither topology nor API access without that identity.
 
@@ -42,8 +42,8 @@ Peer and folder-sharing configuration writes use an idempotent reconciler rather
 3. Refuse ambiguous states: duplicate device IDs, a folder ID pointing to an unexpected path, plaintext data in a proposed shard path, or a shard folder whose type is not Receive Encrypted.
 4. Produce a field-level preview while preserving unrelated devices, folders, and unknown configuration fields.
 5. Ensure peer device records exist on all instances.
-6. Create or update the Receive Encrypted folder on shards before trusted devices advertise it.
-7. Update trusted-device folder shares, attaching the password only to shard peers.
+6. Create or update the Receive Encrypted folder on shards before devices advertise it.
+7. Update managed-folder shares, attaching the password only to shard peers while preserving shard-related peer-trust settings.
 8. Configure shard-to-shard ciphertext sharing.
 9. Remove unregistered peers from the managed Tephramesh folder while preserving unrelated global Syncthing device and folder configuration.
 10. Re-read each configuration and runtime folder status. Stop on the first failed instance and leave a rerunnable, convergent plan.

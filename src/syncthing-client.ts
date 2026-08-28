@@ -234,18 +234,21 @@ export class SyncthingClient {
   async ensureDevice(
     deviceId: string,
     name: string,
-    untrusted: boolean,
+    untrusted?: boolean,
   ): Promise<void> {
     const existing = (await this.getDevices()).find(
       (device) => device.deviceID === deviceId,
     );
     if (existing) {
-      if (existing.name !== name || existing.untrusted !== untrusted) {
+      if (existing.name !== name || (untrusted !== undefined && existing.untrusted !== untrusted)) {
         await this.request<void>(
           `/rest/config/devices/${encodeURIComponent(deviceId)}`,
           {
             method: "PATCH",
-            body: JSON.stringify({ name, untrusted }),
+            body: JSON.stringify({
+              name,
+              ...(untrusted === undefined ? {} : { untrusted }),
+            }),
           },
         );
       }
@@ -259,14 +262,15 @@ export class SyncthingClient {
           ...template,
           deviceID: deviceId,
           name,
-          untrusted,
+          ...(untrusted === undefined ? {} : { untrusted }),
         }),
       });
     }
     const configured = (await this.getDevices()).find(
       (device) => device.deviceID === deviceId,
     );
-    if (!configured || configured.name !== name || configured.untrusted !== untrusted) {
+    if (!configured || configured.name !== name ||
+      (untrusted !== undefined && configured.untrusted !== untrusted)) {
       throw new SyncthingApiError(
         `Syncthing did not retain the configuration for device “${name}”.`,
       );

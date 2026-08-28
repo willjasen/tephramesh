@@ -94,6 +94,14 @@ describe("mesh reconciliation inspection", () => {
     ).toEqual([]);
   });
 
+  it("does not report a shard peer's existing trust setting as drift", () => {
+    const current = snapshot(device);
+    current.devices[0]!.untrusted = true;
+    expect(
+      inspectReconciliationSnapshot(current, [device, shard], "vault-id", "Vault", key),
+    ).toEqual([]);
+  });
+
   it("reports repairable peer, share, label, and invitation drift", () => {
     const current = snapshot(device, {
       devices: [],

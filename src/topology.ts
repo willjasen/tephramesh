@@ -112,7 +112,8 @@ export interface MeshPlan {
 }
 
 export interface MeshPeerPolicy {
-  untrusted: boolean;
+  /** Undefined means peer trust is managed by Syncthing/the operator, not Tephramesh. */
+  untrusted?: boolean;
   encryptionPassword: string;
 }
 
@@ -121,9 +122,12 @@ export function meshPeerPolicy(
   remote: MeshInstance,
   shardKey: string,
 ): MeshPeerPolicy {
+  const involvesShard = local.kind === "shard" || remote.kind === "shard";
   const trustedDeviceToShard = local.kind === "device" && remote.kind === "shard";
   return {
-    untrusted: false,
+    // A shard can also host ordinary folders. Do not change its peer-trust setting
+    // when creating or reconciling this managed share.
+    untrusted: involvesShard ? undefined : false,
     encryptionPassword: trustedDeviceToShard ? shardKey : "",
   };
 }

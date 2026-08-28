@@ -71,12 +71,12 @@ describe("mesh planner", () => {
     expect(shard?.folder.devices.every((item) => item.encryptionPassword === "")).toBe(true);
   });
 
-  it("keeps shard device records trusted in both directions", () => {
+  it("leaves shard peer trust unmanaged in both directions", () => {
     const plan = createMeshPlan(instances, "vault-id", "My vault", password);
     const laptop = plan.instances.find((item) => item.instanceId === "laptop");
     const shard = plan.instances.find((item) => item.instanceId === "shard");
-    expect(laptop?.devices.find((item) => item.deviceID === "SHARD-ID")?.untrusted).toBe(false);
-    expect(shard?.devices.find((item) => item.deviceID === "LAPTOP-ID")?.untrusted).toBe(false);
+    expect(laptop?.devices.find((item) => item.deviceID === "SHARD-ID")?.untrusted).toBeUndefined();
+    expect(shard?.devices.find((item) => item.deviceID === "LAPTOP-ID")?.untrusted).toBeUndefined();
   });
 
   it("shares directly between multiple shards without attaching the key", () => {
@@ -90,11 +90,11 @@ describe("mesh planner", () => {
     };
     const firstShard = instances[2]!;
     expect(meshPeerPolicy(firstShard, secondShard, password)).toEqual({
-      untrusted: false,
+      untrusted: undefined,
       encryptionPassword: "",
     });
     expect(meshPeerPolicy(secondShard, firstShard, password)).toEqual({
-      untrusted: false,
+      untrusted: undefined,
       encryptionPassword: "",
     });
 
