@@ -363,7 +363,7 @@ export default class TephrameshPlugin extends Plugin {
     }>;
   } {
     const local = this.getLocalSigningRecord();
-    const installationOptions = this.getSigningInstallationOptions();
+    const installationOptions = this.getAllSigningInstallationOptions();
     const enrollmentByKeyId = new Map(
       this.signingEnrollments.map((enrollment) => [enrollment.keyId, enrollment]),
     );
@@ -375,7 +375,7 @@ export default class TephrameshPlugin extends Plugin {
       rootKeyId: this.signingRootKeyId,
       revision: this.signedConfigRevision,
       localInstallationName: local
-        ? this.getSigningInstallationOptions().find(
+        ? this.getAllSigningInstallationOptions().find(
             (option) => option.bindingId === local.bindingId,
           )?.name
         : undefined,
@@ -412,6 +412,22 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   getSigningInstallationOptions(): Array<{
+    bindingId: string;
+    deviceId: string;
+    name: string;
+    source: "mesh" | "known";
+  }> {
+    return this.getAllSigningInstallationOptions().filter((installation) => {
+      const enrolled = this.signingEnrollments.some(
+        (enrollment) =>
+          enrollment.bindingId === installation.bindingId ||
+          enrollment.deviceId === installation.deviceId,
+      );
+      return !enrolled;
+    });
+  }
+
+  private getAllSigningInstallationOptions(): Array<{
     bindingId: string;
     deviceId: string;
     name: string;

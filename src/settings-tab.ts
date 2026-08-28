@@ -551,6 +551,42 @@ export class TephrameshSettingTab extends PluginSettingTab {
         text: "This signed configuration is readable, but this Obsidian installation cannot change it until an already enrolled installation approves its signing key.",
         cls: "tephramesh-config-warning",
       });
+      container.createEl("h3", { text: "Already enrolled installations" });
+      container.createEl("p", {
+        text: "Send the enrollment request to one of these installations for approval.",
+        cls: "setting-item-description",
+      });
+      const enrolledList = container.createDiv({
+        cls: "tephramesh-authenticated-list",
+      });
+      for (const installation of status.authenticatedInstallations) {
+        const sourceLabel = installation.source === "mesh"
+          ? "Active device"
+          : installation.source === "known"
+            ? "Known device"
+            : "No longer configured";
+        const enrolledSetting = new Setting(enrolledList)
+          .setName(installation.name)
+          .setDesc(
+            `${sourceLabel} · Device ${shortDeviceId(installation.deviceId)} · Key ${installation.keyId.slice(0, 12)}`,
+          );
+        enrolledSetting.settingEl.addClass(
+          "tephramesh-authenticated-installation",
+          `is-${installation.source}`,
+        );
+        enrolledSetting.nameEl.empty();
+        enrolledSetting.nameEl.createSpan({
+          text: sourceLabel,
+          cls: `tephramesh-authenticated-role is-${installation.source}`,
+        });
+        enrolledSetting.nameEl.appendText(` ${installation.name}`);
+        if (installation.isEnrollmentRoot) {
+          enrolledSetting.nameEl.createSpan({
+            text: "Root",
+            cls: "tephramesh-authenticated-marker is-root",
+          });
+        }
+      }
       const eligibleInstallations = signingInstallations;
       const enrollmentSelectedId = eligibleInstallations.some(
         (installation) => installation.bindingId === this.signingSelectedInstanceId,
