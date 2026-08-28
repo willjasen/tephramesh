@@ -50,6 +50,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private reconciliationElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
   private visible = false;
+  private configRevealed = false;
 
   constructor(app: App, private readonly plugin: TephrameshPlugin) {
     super(app, plugin);
@@ -65,6 +66,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
 
   hide(): void {
     this.visible = false;
+    this.configRevealed = false;
     this.plugin.stopStatusPolling();
   }
 
@@ -234,6 +236,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       button.setAttribute("aria-selected", String(active));
       button.addEventListener("click", () => {
         if (this.activeSection === section.id) return;
+        if (this.activeSection === "config") this.configRevealed = false;
         this.activeSection = section.id;
         this.display();
       });
@@ -343,22 +346,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
             this.plugin.restartNoteSyncPolling();
           }),
       );
-    new Setting(container)
-      .setName("Saved config versions")
-      .setDesc("Number of encrypted configuration versions to retain (1–10).")
-      .addText((text) => {
-        text.inputEl.type = "number";
-        text.inputEl.min = "1";
-        text.inputEl.max = "10";
-        text.inputEl.step = "1";
-        text.setValue(String(this.plugin.settings.configHistoryVersions));
-        text.onChange(async (value) => {
-          const count = Number(value);
-          if (!Number.isInteger(count) || count < 1 || count > 10) return;
-          this.plugin.settings.configHistoryVersions = count;
-          await this.plugin.saveSettings();
-        });
-      });
     const hostCount = activeMeshInstances(this.plugin.settings.instances).length;
     const defaultRequiredHosts = Math.max(
       1,
@@ -409,6 +396,32 @@ export class TephrameshSettingTab extends PluginSettingTab {
       text: "Read-only view of the currently unlocked configuration. It includes API keys and the shard encryption key; keep this screen private.",
       cls: "tephramesh-config-warning",
     });
+    new Setting(container)
+      .setName("Saved config versions")
+      .setDesc("Number of encrypted configuration versions to retain (1–10).")
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = "1";
+        text.inputEl.max = "10";
+        text.inputEl.step = "1";
+        text.setValue(String(this.plugin.settings.configHistoryVersions));
+        text.onChange(async (value) => {
+          const count = Number(value);
+          if (!Number.isInteger(count) || count < 1 || count > 10) return;
+          this.plugin.settings.configHistoryVersions = count;
+          await this.plugin.saveSettings();
+        });
+      });
+    if (!this.configRevealed) {
+      new Setting(container)
+        .setName("View decrypted configuration")
+        .setDesc("The view includes API keys and the shard encryption key; keep it private.")
+        .addButton((button) => button.setButtonText("Show config").onClick(() => {
+          this.configRevealed = true;
+          this.render();
+        }));
+      return;
+    }
     const config = this.plugin.getDecryptedConfig();
     if (!config) {
       container.createEl("p", { text: "Unlock Tephramesh to view the decrypted configuration." });
