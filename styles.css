@@ -153,6 +153,12 @@ button.tephramesh-pending-button {
   margin: 0;
 }
 
+.tephramesh-topology-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
 .tephramesh-topology-operating .tephramesh-topology-metrics {
   margin-top: var(--size-4-3);
 }
@@ -161,6 +167,10 @@ button.tephramesh-pending-button {
   align-items: flex-start;
   display: flex;
   gap: var(--size-4-3);
+}
+
+.tephramesh-topology-heading .tephramesh-topology-status {
+  align-items: center;
 }
 
 .tephramesh-topology-status strong {
@@ -252,6 +262,14 @@ button.tephramesh-pending-button {
   display: flex;
   flex-direction: column;
   padding: var(--size-4-3);
+}
+
+.tephramesh-topology-metric.is-online {
+  background: color-mix(in srgb, var(--text-success) 18%, var(--background-primary));
+}
+
+.tephramesh-topology-metric.is-offline {
+  background: color-mix(in srgb, var(--text-warning) 18%, var(--background-primary));
 }
 
 .tephramesh-topology-metric strong {

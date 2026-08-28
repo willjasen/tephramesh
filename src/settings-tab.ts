@@ -19,8 +19,6 @@ import {
   isRuntimeStatusFresh,
   meshRuntimeStates,
   topologyHealthState,
-  unavailableInstanceLabels,
-  unavailableStatusIsTolerated,
   unavailableInstancesSummary,
 } from "./topology";
 import { InstanceModal } from "./instance-modal";
@@ -802,16 +800,32 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const configured = metricsFor(activeInstances);
       const operating = metricsFor(operatingInstances);
       const healthState = topologyHealthState(activeInstances, operatingInstances);
-      const unavailableIsTolerated = unavailableStatusIsTolerated(
-        this.plugin.settings.noteSyncRequiredHosts,
-        activeInstances.length,
-      );
-      const unavailableLabels = unavailableInstanceLabels(activeInstances, operatingInstances);
       this.topologyElement.addClass("is-valid");
       if (healthState === "warning") this.topologyElement.addClass("is-warning");
 
       const operatingSection = this.topologyElement.createDiv({ cls: "tephramesh-topology-section tephramesh-topology-operating" });
-      operatingSection.createEl("h3", { text: "Operating now" });
+      const operatingHeading = operatingSection.createDiv({ cls: "tephramesh-topology-heading" });
+      operatingHeading.createEl("h3", { text: "Operating now" });
+      const status = operatingHeading.createDiv({
+        cls: "tephramesh-topology-status",
+      });
+      status.createSpan({ cls: `tephramesh-topology-indicator is-${healthState}` });
+      const statusText = status.createDiv();
+      statusText.createEl("strong", { text: healthState === "healthy" ? "Healthy" : "Warning" });
+      const runtimeGroup = operatingSection.createDiv({
+        cls: "tephramesh-topology-runtime-group",
+      });
+      for (const runtimeState of meshRuntimeStates(
+        this.plugin.settings.instances,
+        this.plugin.runtimeStatuses,
+        this.plugin.settings.offlineTimeoutSeconds,
+      )) {
+        if (runtimeState === "unavailable") continue;
+        const runtimeBadge = runtimeGroup.createSpan({
+          cls: `tephramesh-topology-runtime is-${runtimeState}`,
+          text: runtimeState,
+        });
+      }
       operatingSection.createDiv({
         cls: "tephramesh-topology-subtitle",
         text: operatingInstances.length === activeInstances.length
@@ -820,43 +834,32 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       const operatingMetrics = operatingSection.createDiv({ cls: "tephramesh-topology-metrics" });
       const globalSize = formatDataSize(operating.globalBytes) ?? "—";
-      for (const [label, value] of [
-        [operating.devices === 1 ? "Device" : "Devices", operating.devices],
-        [operating.shards === 1 ? "Shard" : "Shards", operating.shards],
-        [operating.connections === 1 ? "Connection" : "Connections", operating.connections],
-        ["Global files", operating.globalFiles ?? "—"],
-        ["Global size", globalSize],
-      ] as const) {
-        const metric = operatingMetrics.createDiv({ cls: "tephramesh-topology-metric" });
+      for (const { label, value, role, online } of [
+        {
+          label: operating.devices === 1 ? "Device" : "Devices",
+          value: operating.devices,
+          role: "devices",
+          online: configured.devices > 0 && operating.devices === configured.devices,
+        },
+        {
+          label: operating.shards === 1 ? "Shard" : "Shards",
+          value: operating.shards,
+          role: "shards",
+          online: configured.shards > 0 && operating.shards === configured.shards,
+        },
+        { label: operating.connections === 1 ? "Connection" : "Connections", value: operating.connections, role: undefined, online: undefined },
+        { label: "Global files", value: operating.globalFiles ?? "—", role: undefined, online: undefined },
+        { label: "Global size", value: globalSize, role: undefined, online: undefined },
+      ]) {
+        const metric = operatingMetrics.createDiv({
+          cls: `tephramesh-topology-metric${role ? ` is-${online ? "online" : "offline"}` : ""}`,
+        });
         metric.createEl("strong", { text: String(value) });
         metric.createSpan({ text: label });
       }
 
       const configuredSection = this.topologyElement.createDiv({ cls: "tephramesh-topology-section" });
       configuredSection.createEl("h3", { text: "Configured" });
-      const status = configuredSection.createDiv({
-        cls: "tephramesh-topology-status",
-      });
-      status.createSpan({ cls: `tephramesh-topology-indicator is-${healthState}` });
-      const statusText = status.createDiv();
-      statusText.createEl("strong", { text: healthState === "healthy" ? "Healthy" : "Warning" });
-      const runtimeGroup = status.createDiv({
-        cls: "tephramesh-topology-runtime-group",
-      });
-      for (const runtimeState of meshRuntimeStates(
-        this.plugin.settings.instances,
-        this.plugin.runtimeStatuses,
-        this.plugin.settings.offlineTimeoutSeconds,
-      )) {
-        const runtimeBadge = runtimeGroup.createSpan({
-          cls: `tephramesh-topology-runtime is-${runtimeState}${runtimeState === "unavailable" && unavailableIsTolerated ? " is-warning" : ""}`,
-          text: runtimeState,
-        });
-        if (runtimeState === "unavailable") {
-          runtimeBadge.setAttribute("title", unavailableLabels.join("\n"));
-          runtimeBadge.setAttribute("aria-label", `Unavailable: ${unavailableLabels.join(", ")}`);
-        }
-      }
       const metrics = configuredSection.createDiv({ cls: "tephramesh-topology-metrics" });
       for (const [label, value] of [
         [configured.devices === 1 ? "Device" : "Devices", configured.devices],
