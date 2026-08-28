@@ -777,6 +777,15 @@ export default class TephrameshPlugin extends Plugin {
     this.settingTab?.rerenderIfVisible();
   }
 
+  async removeKnownDevice(deviceId: string): Promise<void> {
+    this.settings.knownDevices = this.settings.knownDevices.filter(
+      (known) => known.deviceId !== deviceId,
+    );
+    await this.saveSettings();
+    await this.refreshReconciliation(true);
+    this.settingTab?.rerenderIfVisible();
+  }
+
   async completePendingInstance(candidate: MeshInstance): Promise<void> {
     if (candidate.setupState !== "pending") return;
     await this.assertMeshReadyForInstanceAdd();

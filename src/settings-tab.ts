@@ -34,6 +34,7 @@ import { MeshNotReadyError } from "./mesh-errors";
 import { DeleteConfigModal } from "./delete-config-modal";
 import { formatDataSize } from "./format";
 import { operatingSystemPresentation } from "./platform";
+import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
 
 type SettingsSection = "instances" | "vault" | "config" | "topology";
 
@@ -650,6 +651,23 @@ export class TephrameshSettingTab extends PluginSettingTab {
       setting.nameEl.appendText(` ${known.name}`);
       setting.nameEl.createSpan({ text: ` · ${shortDeviceId(known.deviceId)}`, cls: "tephramesh-instance-heading-meta" });
       setting.descEl.setText("A trusted Syncthing peer outside the Tephramesh mesh.");
+      setting.addButton((button) =>
+        button
+          .setIcon("trash-2")
+          .setWarning()
+          .setTooltip("Remove Known device")
+          .onClick(() => {
+            new RemoveKnownDeviceModal(this.app, known, async () => {
+              await this.plugin.removeKnownDevice(known.deviceId);
+              this.display();
+              showTephrameshNotice(
+                "success",
+                "Known device removed",
+                `${known.name} is no longer preserved by mesh repair. Syncthing configuration and files were not changed.`,
+              );
+            }).open();
+          }),
+      );
     }
   }
 
