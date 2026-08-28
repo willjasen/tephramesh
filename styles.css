@@ -58,6 +58,27 @@
   padding-top: var(--size-4-6);
 }
 
+.tephramesh-instance-drag-handle {
+  color: var(--text-muted);
+  cursor: grab;
+  display: inline-flex;
+  margin-right: var(--size-4-2);
+  vertical-align: middle;
+}
+
+.tephramesh-instance-drag-handle:active,
+.tephramesh-instance-card.is-dragging .tephramesh-instance-drag-handle {
+  cursor: grabbing;
+}
+
+.tephramesh-instance-card.is-dragging {
+  opacity: 0.55;
+}
+
+.tephramesh-instance-card.is-drag-over {
+  border-top: 2px solid var(--interactive-accent);
+}
+
 .tephramesh-instance-heading-meta {
   color: var(--text-muted);
   font-weight: var(--font-normal);

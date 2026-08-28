@@ -3,6 +3,7 @@ import {
   ButtonComponent,
   PluginSettingTab,
   Setting,
+  setIcon,
 } from "obsidian";
 import type TephrameshPlugin from "./main";
 import type { InstanceKind, InstanceRuntimeStatus, MeshInstance } from "./model";
@@ -450,10 +451,46 @@ export class TephrameshSettingTab extends PluginSettingTab {
       button.addEventListener("click", () => this.openInstanceModal(kind));
     }
 
-    for (const instance of this.plugin.settings.instances) {
+    const orderedInstances = [...this.plugin.settings.instances].sort(
+      (a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0),
+    );
+    orderedInstances.forEach((instance, index) => {
       const setting = new Setting(container);
       setting.settingEl.addClass("tephramesh-instance-card");
+      setting.settingEl.dataset.instanceId = instance.id;
+      const dragHandle = document.createElement("span");
+      dragHandle.className = "tephramesh-instance-drag-handle";
+      dragHandle.setAttribute("role", "button");
+      dragHandle.setAttribute("tabindex", "0");
+      dragHandle.setAttribute("aria-label", `Drag to reorder ${instance.name}`);
+      dragHandle.setAttribute("draggable", "true");
+      setIcon(dragHandle, "grip-vertical");
+      setting.settingEl.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        setting.settingEl.addClass("is-drag-over");
+      });
+      setting.settingEl.addEventListener("dragleave", () => {
+        setting.settingEl.removeClass("is-drag-over");
+      });
+      setting.settingEl.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        setting.settingEl.removeClass("is-drag-over");
+        const sourceId = event.dataTransfer?.getData("text/plain");
+        if (!sourceId || sourceId === instance.id) return;
+        await this.plugin.setInstanceDisplayOrder(sourceId, index);
+        this.display();
+      });
+      dragHandle.addEventListener("dragstart", (event) => {
+        event.dataTransfer?.setData("text/plain", instance.id);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        setting.settingEl.addClass("is-dragging");
+      });
+      dragHandle.addEventListener("dragend", () => {
+        setting.settingEl.removeClass("is-dragging");
+        container.querySelectorAll(".is-drag-over").forEach((element) => element.removeClass("is-drag-over"));
+      });
       setting.nameEl.empty();
+      setting.nameEl.prepend(dragHandle);
       setting.nameEl.createSpan({
         text: instance.kind === "shard" ? "Shard" : "Device",
         cls: `tephramesh-instance-kind is-${instance.kind}`,
@@ -604,7 +641,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
             }),
         );
       }
-    }
+    });
     for (const known of this.plugin.settings.knownDevices) {
       const setting = new Setting(container);
       setting.settingEl.addClass("tephramesh-instance-card");

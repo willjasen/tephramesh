@@ -15,6 +15,8 @@ export interface Endpoint {
 
 export interface MeshInstance {
   id: string;
+  /** Persisted display position in the Instances settings tab. */
+  displayOrder?: number;
   name: string;
   kind: InstanceKind;
   endpoint: Endpoint;
@@ -141,6 +143,16 @@ export interface InstanceRuntimeStatus {
   traffic?: SyncthingTrafficSample;
   downloadBytesPerSecond?: number;
   uploadBytesPerSecond?: number;
+}
+
+export function normalizeInstanceDisplayOrder(instances: unknown): MeshInstance[] {
+  if (!Array.isArray(instances)) return [];
+  return instances.map((instance, index) => ({
+    ...(instance as MeshInstance),
+    displayOrder: Number.isFinite((instance as MeshInstance).displayOrder)
+      ? (instance as MeshInstance).displayOrder
+      : index,
+  }));
 }
 
 export interface SyncthingTrafficSample {

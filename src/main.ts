@@ -1,5 +1,5 @@
 import { normalizePath, Plugin, setIcon } from "obsidian";
-import { DEFAULT_SETTINGS, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings, type KnownDevice } from "./model";
+import { DEFAULT_SETTINGS, normalizeInstanceDisplayOrder, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings, type KnownDevice } from "./model";
 import { TephrameshSettingTab } from "./settings-tab";
 import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
 import { showTephrameshNotice } from "./notices";
@@ -159,7 +159,7 @@ export default class TephrameshPlugin extends Plugin {
     this.settings = {
       ...structuredClone(DEFAULT_SETTINGS),
       ...legacy,
-      instances: Array.isArray(legacy?.instances) ? legacy.instances : [],
+      instances: normalizeInstanceDisplayOrder(legacy?.instances),
       schemaVersion: 3,
     };
     this.encryptedData =
@@ -392,9 +392,7 @@ export default class TephrameshPlugin extends Plugin {
         ...structuredClone(DEFAULT_SETTINGS),
         ...storedSettings,
         ageRecipient: recipient,
-        instances: Array.isArray(protectedData.settings.instances)
-          ? protectedData.settings.instances
-          : [],
+        instances: normalizeInstanceDisplayOrder(protectedData.settings.instances),
         schemaVersion: 3,
       };
       if (!Object.prototype.hasOwnProperty.call(protectedData.settings, "noteSyncRequiredHosts")) {
@@ -1111,6 +1109,22 @@ export default class TephrameshPlugin extends Plugin {
       await this.saveSettings();
       throw error;
     }
+  }
+
+  async setInstanceDisplayOrder(instanceId: string, targetIndex: number): Promise<void> {
+    const ordered = [...this.settings.instances].sort(
+      (a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0),
+    );
+    const currentIndex = ordered.findIndex((instance) => instance.id === instanceId);
+    if (currentIndex < 0) return;
+    const boundedIndex = Math.max(0, Math.min(Math.trunc(targetIndex), ordered.length - 1));
+    if (currentIndex !== boundedIndex) {
+      const [instance] = ordered.splice(currentIndex, 1);
+      if (instance) ordered.splice(boundedIndex, 0, instance);
+    }
+    ordered.forEach((instance, order) => { instance.displayOrder = order; });
+    this.settings.instances = ordered;
+    await this.saveSettings();
   }
 
   async updateManagedIgnoreRules(lines: string[]): Promise<void> {
