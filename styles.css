@@ -140,6 +140,16 @@
   overflow: hidden;
 }
 
+.tephramesh-enrolled-status {
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-semibold);
+  margin: var(--size-4-2) 0 var(--size-4-1);
+}
+
+.tephramesh-enrolled-details {
+  margin-top: 0;
+}
+
 .tephramesh-authenticated-installation.setting-item {
   border-left: 3px solid var(--interactive-accent);
   padding-left: var(--size-4-3);

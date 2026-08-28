@@ -288,7 +288,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderMesh(container: HTMLElement): void {
-    container.createEl("h2", { text: "Vault mesh" });
     new Setting(container)
       .setName("Syncthing folder ID")
       .setDesc("Shared identity of this vault across every instance.")
@@ -403,11 +402,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderConfig(container: HTMLElement): void {
-    container.createEl("h2", { text: "Config history" });
-    container.createEl("p", {
-      text: "Inspect saved encrypted snapshots or restore an earlier version. Decrypted views include API keys and the shard encryption key; keep this screen private.",
-      cls: "tephramesh-config-warning",
-    });
     new Setting(container)
       .setName("Saved config versions")
       .setDesc("Number of encrypted configuration versions to retain (1–10).")
@@ -495,7 +489,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
     container: HTMLElement,
   ): "unsigned" | "approval-required" | "enrolled" {
     const status = this.plugin.getSigningEnvironmentStatus();
-    container.createEl("h2", { text: "Configuration signing" });
     const signingInstallations = this.plugin.getSigningInstallationOptions();
     const selectedId = signingInstallations.some(
       (installation) => installation.bindingId === this.signingSelectedInstanceId,
@@ -682,8 +675,12 @@ export class TephrameshSettingTab extends PluginSettingTab {
     }
 
     container.createEl("p", {
-      text: `Enrolled as ${status.localInstallationName ?? "this installation"} · signed revision ${status.revision}. ${status.authenticatedInstallations.length} installation signing key${status.authenticatedInstallations.length === 1 ? "" : "s"} enrolled.`,
-      cls: "setting-item-description",
+      text: `Enrolled as ${status.localInstallationName ?? "this installation"}`,
+      cls: "tephramesh-enrolled-status",
+    });
+    container.createEl("p", {
+      text: `Signed revision ${status.revision}. ${status.authenticatedInstallations.length} installation signing key${status.authenticatedInstallations.length === 1 ? "" : "s"} enrolled.`,
+      cls: "setting-item-description tephramesh-enrolled-details",
     });
     container.createEl("h3", { text: "Authenticated installations" });
     const authenticatedList = container.createDiv({
@@ -821,7 +818,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
 
   private renderInstances(container: HTMLElement): void {
     const heading = container.createDiv({ cls: "tephramesh-heading-row" });
-    heading.createEl("h2", { text: "Instances" });
     const controls = heading.createDiv();
     for (const kind of ["device", "shard"] as const) {
       const button = controls.createEl("button", {
@@ -1115,7 +1111,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderTopology(container: HTMLElement): void {
-    container.createEl("h2", { text: "Topology preview" });
     this.topologyElement = container.createDiv({ cls: "tephramesh-topology" });
     this.updateTopology();
     this.reconciliationElement = container.createDiv({
