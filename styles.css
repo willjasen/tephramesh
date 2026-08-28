@@ -284,8 +284,10 @@ button.tephramesh-pending-button {
 .tephramesh-topology-metric {
   background: var(--background-primary);
   border-radius: var(--radius-s);
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   padding: var(--size-4-3);
 }
 
@@ -300,6 +302,11 @@ button.tephramesh-pending-button {
 .tephramesh-topology-metric strong {
   font-size: 1.4em;
   line-height: 1.2;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  /* Keep large counts inside narrow cards while preserving the normal size
+     for wider cards. The fallback is useful on older embedded webviews. */
+  font-size: clamp(1rem, 12cqw, 1.4em);
 }
 
 .tephramesh-topology-metric span,
@@ -327,7 +334,7 @@ button.tephramesh-pending-button {
 
 @media (max-width: 500px) {
   .tephramesh-topology-metrics {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .tephramesh-topology-detail {
