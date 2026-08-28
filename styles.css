@@ -68,8 +68,15 @@
 }
 
 .tephramesh-instance-section-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
   margin: 0 0 0.5em;
+}
+
+.tephramesh-instance-section-heading h3 {
   font-size: var(--font-ui-medium);
+  margin: 0;
 }
 
 .tephramesh-instance-drag-handle {

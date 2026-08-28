@@ -817,16 +817,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderInstances(container: HTMLElement): void {
-    const heading = container.createDiv({ cls: "tephramesh-heading-row" });
-    const controls = heading.createDiv();
-    for (const kind of ["device", "shard"] as const) {
-      const button = controls.createEl("button", {
-        text: `Add ${kind}`,
-        cls: kind === "device" ? "mod-cta" : undefined,
-      });
-      button.addEventListener("click", () => this.openInstanceModal(kind));
-    }
-
     const orderedInstances = [...this.plugin.settings.instances].sort(
       (a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0),
     );
@@ -837,12 +827,18 @@ export class TephrameshSettingTab extends PluginSettingTab {
     let hasRenderedSection = false;
     for (const group of instanceGroups) {
       const instances = orderedInstances.filter((instance) => instance.kind === group.kind);
-      if (instances.length === 0) continue;
-      const section = container.createDiv({ cls: "tephramesh-instance-section" });
-      if (hasRenderedSection) section.addClass("has-divider");
-      hasRenderedSection = true;
-      section.createEl("h3", { text: group.label, cls: "tephramesh-instance-section-heading" });
-      instances.forEach((instance) => {
+      if (group.kind === "shard" || instances.length > 0) {
+        const section = container.createDiv({ cls: "tephramesh-instance-section" });
+        if (hasRenderedSection) section.addClass("has-divider");
+        hasRenderedSection = true;
+        const sectionHeading = section.createDiv({ cls: "tephramesh-instance-section-heading" });
+        sectionHeading.createEl("h3", { text: group.label });
+        const addButton = sectionHeading.createEl("button", {
+          text: `Add ${group.kind}`,
+          cls: group.kind === "device" ? "mod-cta" : undefined,
+        });
+        addButton.addEventListener("click", () => this.openInstanceModal(group.kind));
+        instances.forEach((instance) => {
         const index = orderedInstances.indexOf(instance);
         const setting = new Setting(section);
       setting.settingEl.addClass("tephramesh-instance-card");
