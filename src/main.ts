@@ -39,6 +39,7 @@ import {
   isConfigHistoryEnvelope,
   encryptConfigHistory,
   normalizeConfigHistoryVersions,
+  repairAliasedConfigHistory,
   verifyConfigHistory,
   type ConfigHistoryBlock,
 } from "./config-history";
@@ -266,6 +267,32 @@ export default class TephrameshPlugin extends Plugin {
     };
   }
 
+  getConfigHistory(): ConfigHistoryBlock[] {
+    if (!this.secrets) return [];
+    return structuredClone(this.configHistoryBlocks).reverse();
+  }
+
+  async restoreConfigVersion(version: number): Promise<void> {
+    if (!this.secrets) throw new Error("Unlock Tephramesh encryption before restoring a config version.");
+    await verifyConfigHistory(this.configHistoryBlocks);
+    const block = this.configHistoryBlocks.find((candidate) => candidate.version === version);
+    if (!block) throw new Error(`Config version ${version} is no longer available.`);
+
+    const recipient = this.settings.ageRecipient;
+    const historyVersions = this.settings.configHistoryVersions;
+    this.applyProtectedData(block.config, recipient);
+    // Restoring operational state must not silently change the user's current
+    // history-retention policy or discard versions during the restore itself.
+    this.settings.configHistoryVersions = historyVersions;
+    await this.saveSettings();
+    this.runtimeStatuses.clear();
+    this.reconciliationReport = { state: "checking", issues: [], repairBlockedReasons: [] };
+    this.restartPolling();
+    this.restartNoteSyncPolling();
+    if (this.statusPollingEnabled) void this.refreshStatuses(true);
+    void this.refreshReconciliation(true);
+  }
+
   async configureEncryption(recipient: string, identity: string): Promise<void> {
     const keys = await validateAgeKeyPair(recipient, identity);
     const migrated = emptySecrets();
@@ -373,51 +400,66 @@ export default class TephrameshPlugin extends Plugin {
       const decrypted = await decryptConfigHistory(identity, this.encryptedData);
       let protectedData: TephrameshProtectedData;
       if (isConfigHistoryEnvelope(decrypted)) {
-        await verifyConfigHistory(decrypted.blocks);
-        this.configHistoryBlocks = decrypted.blocks.slice(-normalizeConfigHistoryVersions(this.settings.configHistoryVersions));
+        let blocks = decrypted.blocks;
+        let repairedAliasedHistory = false;
+        try {
+          await verifyConfigHistory(blocks);
+        } catch {
+          blocks = await repairAliasedConfigHistory(blocks);
+          repairedAliasedHistory = true;
+        }
+        this.configHistoryBlocks = blocks.slice(-normalizeConfigHistoryVersions(this.settings.configHistoryVersions));
         const latest = this.configHistoryBlocks.at(-1)?.config;
         if (!latest) throw new Error("The Tephramesh configuration history has no versions.");
         protectedData = latest;
+        this.applyProtectedData(protectedData, recipient);
+        if (repairedAliasedHistory) await this.saveSettings();
+        return;
       } else {
         this.configHistoryBlocks = [];
         protectedData = await decryptProtectedData(identity, this.encryptedData);
       }
-      const {
-        globalIgnoreRules: _legacyGlobalIgnoreRules,
-        ...storedSettings
-      } = protectedData.settings as TephrameshProtectedData["settings"] & {
-        globalIgnoreRules?: unknown;
-      };
-      this.settings = {
-        ...structuredClone(DEFAULT_SETTINGS),
-        ...storedSettings,
-        ageRecipient: recipient,
-        instances: normalizeInstanceDisplayOrder(protectedData.settings.instances),
-        schemaVersion: 3,
-      };
-      if (!Object.prototype.hasOwnProperty.call(protectedData.settings, "noteSyncRequiredHosts")) {
-        this.settings.noteSyncRequiredHosts = Math.max(
-          1,
-          this.settings.instances.filter((instance) => instance.kind === "shard").length + 1,
-        );
-      }
-      this.settings.managedIgnoreRules = this.settings.managedIgnoreRules.filter(
-        (line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()),
-      );
-      this.secrets = {
-        apiKeys: Object.fromEntries(
-          Object.entries(protectedData.secrets.apiKeys ?? {}).filter(
-            (entry): entry is [string, string] => typeof entry[1] === "string",
-          ),
-        ),
-        shardEncryptionKey: typeof protectedData.secrets.shardEncryptionKey === "string"
-          ? protectedData.secrets.shardEncryptionKey
-          : "",
-      };
+      this.applyProtectedData(protectedData, recipient);
       return;
     }
     this.secrets = await decryptSecrets(identity, this.encryptedData);
     await this.saveSettings();
+  }
+
+  private applyProtectedData(protectedData: TephrameshProtectedData, recipient: string): void {
+    const protectedCopy = structuredClone(protectedData);
+    const {
+      globalIgnoreRules: _legacyGlobalIgnoreRules,
+      ...storedSettings
+    } = protectedCopy.settings as TephrameshProtectedData["settings"] & {
+      globalIgnoreRules?: unknown;
+    };
+    this.settings = {
+      ...structuredClone(DEFAULT_SETTINGS),
+      ...storedSettings,
+      ageRecipient: recipient,
+      instances: normalizeInstanceDisplayOrder(protectedCopy.settings.instances),
+      schemaVersion: 3,
+    };
+    if (!Object.prototype.hasOwnProperty.call(protectedCopy.settings, "noteSyncRequiredHosts")) {
+      this.settings.noteSyncRequiredHosts = Math.max(
+        1,
+        this.settings.instances.filter((instance) => instance.kind === "shard").length + 1,
+      );
+    }
+    this.settings.managedIgnoreRules = this.settings.managedIgnoreRules.filter(
+      (line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()),
+    );
+    this.secrets = {
+      apiKeys: Object.fromEntries(
+        Object.entries(protectedCopy.secrets.apiKeys ?? {}).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      ),
+      shardEncryptionKey: typeof protectedCopy.secrets.shardEncryptionKey === "string"
+        ? protectedCopy.secrets.shardEncryptionKey
+        : "",
+    };
   }
 
   async assertMeshReadyForInstanceAdd(): Promise<void> {

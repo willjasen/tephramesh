@@ -31,6 +31,15 @@ async function sha256Hex(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function configBlockHash(
+  version: number,
+  previousHash: string | null,
+  configHash: string,
+  savedAt: string,
+): Promise<string> {
+  return sha256Hex(JSON.stringify({ version, previousHash, configHash, savedAt }));
+}
+
 export async function createConfigHistoryBlock(
   config: TephrameshProtectedData,
   previous?: ConfigHistoryBlock,
@@ -39,7 +48,7 @@ export async function createConfigHistoryBlock(
   const previousHash = previous?.hash ?? null;
   const configHash = await sha256Hex(JSON.stringify(config));
   const savedAt = new Date().toISOString();
-  const hash = await sha256Hex(JSON.stringify({ version, previousHash, configHash, savedAt }));
+  const hash = await configBlockHash(version, previousHash, configHash, savedAt);
   return { version, previousHash, configHash, hash, savedAt, config };
 }
 
@@ -53,13 +62,68 @@ export async function verifyConfigHistory(blocks: ConfigHistoryBlock[]): Promise
       throw new Error("The Tephramesh configuration history is not a valid chain.");
     }
     const configHash = await sha256Hex(JSON.stringify(block.config));
-    const hash = await sha256Hex(JSON.stringify({ version: block.version, previousHash: block.previousHash, configHash, savedAt: block.savedAt }));
+    const hash = await configBlockHash(block.version, block.previousHash, configHash, block.savedAt);
     if (block.configHash !== configHash || block.hash !== hash) {
       throw new Error("The Tephramesh configuration history failed integrity verification.");
     }
     previousHash = block.hash;
     previousVersion = block.version;
   }
+}
+
+/**
+ * Repairs snapshots affected by the historical in-memory aliasing bug. This is
+ * intentionally narrower than normal verification: every stored link and block
+ * hash must still authenticate its original metadata. Only config hashes and
+ * the links that follow their rebuilt block hashes may change.
+ */
+export async function repairAliasedConfigHistory(
+  blocks: ConfigHistoryBlock[],
+): Promise<ConfigHistoryBlock[]> {
+  if (blocks.length === 0) throw new Error("The Tephramesh configuration history has no versions.");
+  let expectedStoredPreviousHash = blocks[0]!.previousHash;
+  let previousVersion = blocks[0]!.version - 1;
+  for (const block of blocks) {
+    if (
+      !Number.isInteger(block.version) ||
+      block.version <= previousVersion ||
+      block.previousHash !== expectedStoredPreviousHash
+    ) {
+      throw new Error("The Tephramesh configuration history is not a valid chain.");
+    }
+    const storedHash = await configBlockHash(
+      block.version,
+      block.previousHash,
+      block.configHash,
+      block.savedAt,
+    );
+    if (storedHash !== block.hash) {
+      throw new Error("The Tephramesh configuration history failed integrity verification.");
+    }
+    expectedStoredPreviousHash = block.hash;
+    previousVersion = block.version;
+  }
+
+  let rebuiltPreviousHash = blocks[0]!.previousHash;
+  const repaired: ConfigHistoryBlock[] = [];
+  for (const block of blocks) {
+    const configHash = await sha256Hex(JSON.stringify(block.config));
+    const hash = await configBlockHash(
+      block.version,
+      rebuiltPreviousHash,
+      configHash,
+      block.savedAt,
+    );
+    repaired.push({
+      ...structuredClone(block),
+      previousHash: rebuiltPreviousHash,
+      configHash,
+      hash,
+    });
+    rebuiltPreviousHash = hash;
+  }
+  await verifyConfigHistory(repaired);
+  return repaired;
 }
 
 export function isConfigHistoryEnvelope(value: unknown): value is ConfigHistoryEnvelope {

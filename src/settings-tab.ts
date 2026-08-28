@@ -34,6 +34,7 @@ import { MeshNotReadyError } from "./mesh-errors";
 import { DeleteConfigModal } from "./delete-config-modal";
 import { formatDataSize } from "./format";
 import { operatingSystemPresentation } from "./platform";
+import { RestoreConfigVersionModal } from "./restore-config-version-modal";
 import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
 
 type SettingsSection = "instances" | "vault" | "config" | "topology";
@@ -55,6 +56,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private activeSection: SettingsSection = "topology";
   private visible = false;
   private configRevealed = false;
+  private selectedConfigVersion?: number;
 
   constructor(app: App, private readonly plugin: TephrameshPlugin) {
     super(app, plugin);
@@ -71,6 +73,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   hide(): void {
     this.visible = false;
     this.configRevealed = false;
+    this.selectedConfigVersion = undefined;
     this.plugin.stopStatusPolling();
   }
 
@@ -244,7 +247,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
       button.setAttribute("aria-selected", String(active));
       button.addEventListener("click", () => {
         if (this.activeSection === section.id) return;
-        if (this.activeSection === "config") this.configRevealed = false;
+        if (this.activeSection === "config") {
+          this.configRevealed = false;
+          this.selectedConfigVersion = undefined;
+        }
         this.activeSection = section.id;
         this.display();
       });
@@ -400,9 +406,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderConfig(container: HTMLElement): void {
-    container.createEl("h2", { text: "Decrypted plugin config" });
+    container.createEl("h2", { text: "Config history" });
     container.createEl("p", {
-      text: "Read-only view of the currently unlocked configuration. It includes API keys and the shard encryption key; keep this screen private.",
+      text: "Inspect saved encrypted snapshots or restore an earlier version. Decrypted views include API keys and the shard encryption key; keep this screen private.",
       cls: "tephramesh-config-warning",
     });
     new Setting(container)
@@ -421,21 +427,54 @@ export class TephrameshSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+    const history = this.plugin.getConfigHistory();
+    const currentVersion = history[0]?.version;
+    const historyContainer = container.createDiv({ cls: "tephramesh-config-history" });
+    for (const block of history) {
+      const savedAt = new Date(block.savedAt);
+      const dateLabel = Number.isNaN(savedAt.getTime()) ? block.savedAt : savedAt.toLocaleString();
+      const setting = new Setting(historyContainer)
+        .setName(`Version ${block.version}${block.version === currentVersion ? " · Current" : ""}`)
+        .setDesc(dateLabel);
+      setting.addButton((button) => button.setButtonText("View").onClick(() => {
+        this.selectedConfigVersion = block.version;
+        this.configRevealed = true;
+        this.render();
+      }));
+      if (block.version !== currentVersion) {
+        setting.addButton((button) => button.setButtonText("Restore").setWarning().onClick(() => {
+          new RestoreConfigVersionModal(this.app, block.version, async () => {
+            await this.plugin.restoreConfigVersion(block.version);
+            this.selectedConfigVersion = undefined;
+            this.configRevealed = false;
+            this.display();
+            showTephrameshNotice("success", "Config version restored", `Version ${block.version} is now the running configuration and was saved as a new latest version.`);
+          }).open();
+        }));
+      }
+    }
+    if (history.length === 0) {
+      historyContainer.createEl("p", { text: "No saved config versions are available." });
+    }
+
     if (!this.configRevealed) {
       new Setting(container)
         .setName("View decrypted configuration")
         .setDesc("The view includes API keys and the shard encryption key; keep it private.")
         .addButton((button) => button.setButtonText("Show Running Config").onClick(() => {
+          this.selectedConfigVersion = currentVersion;
           this.configRevealed = true;
           this.render();
         }));
       return;
     }
-    const config = this.plugin.getDecryptedConfig();
+    const selectedBlock = history.find((block) => block.version === this.selectedConfigVersion);
+    const config = selectedBlock?.config ?? this.plugin.getDecryptedConfig();
     if (!config) {
       container.createEl("p", { text: "Unlock Tephramesh to view the decrypted configuration." });
       return;
     }
+    container.createEl("h3", { text: selectedBlock ? `Decrypted config version ${selectedBlock.version}` : "Decrypted running config" });
     const pre = container.createEl("pre", { cls: "tephramesh-config-json" });
     pre.createEl("code").setText(JSON.stringify(config, null, 2));
   }

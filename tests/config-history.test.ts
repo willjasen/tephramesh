@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS } from "../src/model";
 import {
   createConfigHistoryBlock,
   normalizeConfigHistoryVersions,
+  repairAliasedConfigHistory,
   verifyConfigHistory,
 } from "../src/config-history";
 import { emptySecrets } from "../src/secret-bundle";
@@ -29,5 +30,23 @@ describe("encrypted configuration history", () => {
     const second = await createConfigHistoryBlock({ ...config, secrets: { ...emptySecrets(), shardEncryptionKey: "changed" } }, first);
     await expect(verifyConfigHistory([first, second])).resolves.toBeUndefined();
     await expect(verifyConfigHistory([{ ...second, configHash: "tampered" },])).rejects.toThrow(/integrity/i);
+  });
+
+  it("repairs config mutations only when the stored chain metadata remains intact", async () => {
+    const first = await createConfigHistoryBlock(config);
+    const second = await createConfigHistoryBlock(
+      { ...config, secrets: { ...emptySecrets(), shardEncryptionKey: "before" } },
+      first,
+    );
+    second.config.secrets.shardEncryptionKey = "mutated after hashing";
+
+    await expect(verifyConfigHistory([first, second])).rejects.toThrow(/integrity/i);
+    const repaired = await repairAliasedConfigHistory([first, second]);
+    await expect(verifyConfigHistory(repaired)).resolves.toBeUndefined();
+    expect(repaired[1]?.config.secrets.shardEncryptionKey).toBe("mutated after hashing");
+
+    await expect(
+      repairAliasedConfigHistory([{ ...first, hash: "tampered" }, second]),
+    ).rejects.toThrow(/integrity/i);
   });
 });
