@@ -34,7 +34,6 @@ export interface TephrameshSettings {
   folderId: string;
   folderLabel: string;
   managedIgnoreRules: string[];
-  shardEncryptionKeyHash: string;
   pollIntervalSeconds: number;
   offlineTimeoutSeconds: number;
   noteSyncPollIntervalSeconds: number;

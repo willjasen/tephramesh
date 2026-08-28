@@ -5,7 +5,7 @@ import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
 import { showTephrameshNotice } from "./notices";
 import { localSyncthingDeviceName } from "./syncthing-device";
 import { MeshNotReadyError } from "./mesh-errors";
-import { generateShardPassword, sha256Hex } from "./security";
+import { generateShardPassword } from "./security";
 import { trafficRates } from "./syncthing-traffic";
 import {
   activeMeshInstances,
@@ -27,7 +27,6 @@ import {
   decryptProtectedData,
   decryptSecrets,
   emptySecrets,
-  encryptProtectedData,
   type TephrameshSecrets,
   type TephrameshProtectedData,
   validateAgeKeyPair,
@@ -42,7 +41,27 @@ import {
   repairAliasedConfigHistory,
   verifyConfigHistory,
   type ConfigHistoryBlock,
+  type ConfigHistoryEnvelope,
 } from "./config-history";
+import {
+  approveEnrollmentRequest,
+  assertSignedRevisionAccepted,
+  createEnrollmentRequest,
+  createEnrollmentApproval,
+  createGenesisEnrollment,
+  createSignedConfigEnvelope,
+  decodeEnrollmentApproval,
+  decodeEnrollmentRequest,
+  DEVICE_SIGNING_SECRET_NAME,
+  encodeEnrollmentCode,
+  generateSigningKeyPair,
+  isSignedConfigEnvelope,
+  sha256Canonical,
+  verifyEnrollmentApproval,
+  verifySignedConfigEnvelope,
+  type DeviceEnrollment,
+  type LocalDeviceSigningRecord,
+} from "./config-signing";
 
 interface EncryptedSettingsEnvelope {
   schemaVersion: 3;
@@ -62,6 +81,10 @@ interface LegacyRootSecrets {
   shardPasswordSecretName?: string;
 }
 
+interface LegacyShardEncryptionKeyHash {
+  shardEncryptionKeyHash?: string;
+}
+
 export default class TephrameshPlugin extends Plugin {
   settings: TephrameshSettings = structuredClone(DEFAULT_SETTINGS);
   runtimeStatuses = new Map<string, InstanceRuntimeStatus>();
@@ -73,6 +96,11 @@ export default class TephrameshPlugin extends Plugin {
   private secrets?: TephrameshSecrets;
   private encryptedData = "";
   private configHistoryBlocks: ConfigHistoryBlock[] = [];
+  private signingRootKeyId = "";
+  private signingEnrollments: DeviceEnrollment[] = [];
+  private signedConfigRevision = 0;
+  private signedConfigHash = "";
+  private signingTrust: "unsigned" | "approval-required" | "enrolled" = "unsigned";
   private storageFormat: 2 | 3 = 3;
   private settingTab!: TephrameshSettingTab;
   private pollingTimer?: number;
@@ -138,6 +166,7 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
+    this.resetSigningRuntimeState();
     const stored = (await this.loadData()) as
       | EncryptedSettingsEnvelope
       | LegacyEncryptedSettings
@@ -157,10 +186,14 @@ export default class TephrameshPlugin extends Plugin {
       return;
     }
     const legacy = stored as LegacyEncryptedSettings | null;
+    const {
+      shardEncryptionKeyHash: _legacyShardEncryptionKeyHash,
+      ...legacySettings
+    } = (legacy ?? {}) as LegacyEncryptedSettings & LegacyShardEncryptionKeyHash;
     this.settings = {
       ...structuredClone(DEFAULT_SETTINGS),
-      ...legacy,
-      instances: normalizeInstanceDisplayOrder(legacy?.instances),
+      ...legacySettings,
+      instances: normalizeInstanceDisplayOrder(legacySettings.instances),
       schemaVersion: 3,
     };
     this.encryptedData =
@@ -194,18 +227,55 @@ export default class TephrameshPlugin extends Plugin {
       blocks = [...blocks, await createConfigHistoryBlock(protectedData, previous)];
     }
     blocks = blocks.slice(-retention);
-    this.configHistoryBlocks = blocks;
-    this.encryptedData = await encryptConfigHistory(ageRecipient, {
+    const history: ConfigHistoryEnvelope = {
       format: "tephramesh-config-history-v1",
       retention,
       blocks,
-    });
+    };
+    let encryptedPayload: unknown = history;
+    let nextSignedEnvelope:
+      | Awaited<ReturnType<typeof createSignedConfigEnvelope>>
+      | undefined;
+    let nextSignedHash = "";
+    let localSigning = this.getLocalSigningRecord();
+    if (this.signingRootKeyId) {
+      if (!localSigning?.rootKeyId) {
+        throw new Error(
+          "Enroll this Obsidian installation before changing the signed Tephramesh configuration.",
+        );
+      }
+      nextSignedEnvelope = await createSignedConfigEnvelope(
+        history,
+        this.signingEnrollments,
+        this.signingRootKeyId,
+        this.signedConfigRevision + 1,
+        localSigning,
+      );
+      nextSignedHash = await sha256Canonical(nextSignedEnvelope);
+      encryptedPayload = nextSignedEnvelope;
+    }
+    const encryptedData = await encryptConfigHistory(ageRecipient, encryptedPayload);
     this.storageFormat = 3;
     await this.saveData({
       schemaVersion: 3,
       ageRecipient,
-      encryptedData: this.encryptedData,
+      encryptedData,
     } satisfies EncryptedSettingsEnvelope);
+    this.configHistoryBlocks = blocks;
+    this.encryptedData = encryptedData;
+    if (nextSignedEnvelope && localSigning) {
+      this.signedConfigRevision = nextSignedEnvelope.revision;
+      this.signedConfigHash = nextSignedHash;
+      this.signingTrust = "enrolled";
+      localSigning = {
+        ...localSigning,
+        pendingRequest: undefined,
+        pendingApproval: undefined,
+        lastAcceptedRevision: nextSignedEnvelope.revision,
+        lastAcceptedEnvelopeHash: nextSignedHash,
+      };
+      this.setLocalSigningRecord(localSigning);
+    }
   }
 
   async deleteConfig(): Promise<void> {
@@ -220,6 +290,8 @@ export default class TephrameshPlugin extends Plugin {
     this.settings = structuredClone(DEFAULT_SETTINGS);
     this.secrets = undefined;
     this.encryptedData = "";
+    this.resetSigningRuntimeState();
+    this.app.secretStorage.setSecret(DEVICE_SIGNING_SECRET_NAME, "");
     this.storageFormat = 3;
     this.runtimeStatuses.clear();
     this.reconciliationReport = {
@@ -272,6 +344,232 @@ export default class TephrameshPlugin extends Plugin {
     return structuredClone(this.configHistoryBlocks).reverse();
   }
 
+  getSigningEnvironmentStatus(): {
+    state: "unsigned" | "approval-required" | "enrolled";
+    rootKeyId: string;
+    revision: number;
+    localInstallationName?: string;
+    pendingRequestCode?: string;
+    authenticatedInstallations: Array<{
+      bindingId: string;
+      deviceId: string;
+      keyId: string;
+      name: string;
+      source: "mesh" | "known" | "unconfigured";
+      isLocal: boolean;
+      createdAt: string;
+      approvedByName?: string;
+      isEnrollmentRoot: boolean;
+    }>;
+  } {
+    const local = this.getLocalSigningRecord();
+    const installationOptions = this.getSigningInstallationOptions();
+    const enrollmentByKeyId = new Map(
+      this.signingEnrollments.map((enrollment) => [enrollment.keyId, enrollment]),
+    );
+    const installationForEnrollment = (bindingId: string, deviceId: string) =>
+      installationOptions.find((option) => option.bindingId === bindingId) ??
+      installationOptions.find((option) => option.deviceId === deviceId);
+    return {
+      state: this.signingTrust,
+      rootKeyId: this.signingRootKeyId,
+      revision: this.signedConfigRevision,
+      localInstallationName: local
+        ? this.getSigningInstallationOptions().find(
+            (option) => option.bindingId === local.bindingId,
+          )?.name
+        : undefined,
+      pendingRequestCode: local?.pendingRequest
+        ? encodeEnrollmentCode(local.pendingRequest)
+        : undefined,
+      authenticatedInstallations: this.signingEnrollments.map((enrollment) => {
+        const installation = installationForEnrollment(
+          enrollment.bindingId,
+          enrollment.deviceId,
+        );
+        const approverEnrollment = enrollmentByKeyId.get(
+          enrollment.approvedByKeyId,
+        );
+        const approverInstallation = approverEnrollment
+          ? installationForEnrollment(
+              approverEnrollment.bindingId,
+              approverEnrollment.deviceId,
+            )
+          : undefined;
+        return {
+          bindingId: enrollment.bindingId,
+          deviceId: enrollment.deviceId,
+          keyId: enrollment.keyId,
+          name: installation?.name ?? "Unconfigured device",
+          source: installation?.source ?? "unconfigured",
+          isLocal: local?.keyId === enrollment.keyId,
+          createdAt: enrollment.createdAt,
+          approvedByName: approverInstallation?.name,
+          isEnrollmentRoot: enrollment.keyId === this.signingRootKeyId,
+        };
+      }),
+    };
+  }
+
+  getSigningInstallationOptions(): Array<{
+    bindingId: string;
+    deviceId: string;
+    name: string;
+    source: "mesh" | "known";
+  }> {
+    const activeDevices = activeMeshInstances(this.settings.instances)
+      .filter((instance) => instance.kind === "device")
+      .map((instance) => ({
+        bindingId: `mesh:${instance.id}`,
+        deviceId: instance.deviceId,
+        name: instance.name,
+        source: "mesh" as const,
+      }));
+    const activeIds = new Set(activeDevices.map((device) => device.deviceId));
+    const knownDevices = this.settings.knownDevices
+      .filter((known) => !activeIds.has(known.deviceId))
+      .map((known) => ({
+        bindingId: `known:${known.deviceId}`,
+        deviceId: known.deviceId,
+        name: known.name,
+        source: "known" as const,
+      }));
+    return [...activeDevices, ...knownDevices];
+  }
+
+  async initializeSigningEnvironment(bindingId: string): Promise<void> {
+    if (this.signingRootKeyId || this.signingTrust !== "unsigned") {
+      throw new Error("Configuration signing is already initialized.");
+    }
+    const installation = this.requireSigningInstallation(bindingId);
+    const existing = this.getLocalSigningRecord();
+    if (existing?.rootKeyId || existing?.pendingRequest) {
+      throw new Error("This installation already has device signing state.");
+    }
+    const keys = await generateSigningKeyPair();
+    const enrollment = await createGenesisEnrollment(
+      installation.bindingId,
+      installation.deviceId,
+      keys,
+    );
+    const record: LocalDeviceSigningRecord = {
+      format: "tephramesh-local-device-signing-v1",
+      bindingId: installation.bindingId,
+      deviceId: installation.deviceId,
+      rootKeyId: keys.keyId,
+      ...keys,
+    };
+    this.setLocalSigningRecord(record);
+    this.signingRootKeyId = keys.keyId;
+    this.signingEnrollments = [enrollment];
+    this.signingTrust = "enrolled";
+    await this.saveSettings();
+  }
+
+  async generateEnrollmentRequest(bindingId: string): Promise<string> {
+    if (!this.signingRootKeyId || this.signingTrust !== "approval-required") {
+      throw new Error("This installation does not need enrollment approval.");
+    }
+    const installation = this.requireSigningInstallation(bindingId);
+    const existing = this.getLocalSigningRecord();
+    if (existing?.rootKeyId) throw new Error("This installation is already enrolled.");
+    const keys = await generateSigningKeyPair();
+    const request = createEnrollmentRequest(
+      installation.bindingId,
+      installation.deviceId,
+      keys,
+    );
+    const record: LocalDeviceSigningRecord = {
+      format: "tephramesh-local-device-signing-v1",
+      bindingId: installation.bindingId,
+      deviceId: installation.deviceId,
+      pendingRequest: request,
+      ...keys,
+    };
+    this.setLocalSigningRecord(record);
+    return encodeEnrollmentCode(request);
+  }
+
+  async approveEnrollmentCode(code: string): Promise<string> {
+    if (this.signingTrust !== "enrolled" || !this.signingRootKeyId) {
+      throw new Error("Only an enrolled installation can approve another device.");
+    }
+    const local = this.getLocalSigningRecord();
+    if (!local?.rootKeyId) throw new Error("The local signing key is unavailable.");
+    const request = decodeEnrollmentRequest(code);
+    const installation = this.requireSigningInstallation(request.bindingId);
+    if (installation.deviceId !== request.deviceId) {
+      throw new Error("The enrollment request does not match that configured device.");
+    }
+    if (this.signingEnrollments.some(
+      (enrollment) => enrollment.keyId === request.keyId,
+    )) {
+      throw new Error("That signing key is already enrolled.");
+    }
+    const enrollment = await approveEnrollmentRequest(request, local);
+    const approval = await createEnrollmentApproval(
+      this.signingRootKeyId,
+      this.signedConfigRevision,
+      this.signedConfigHash,
+      request,
+      [...structuredClone(this.signingEnrollments), enrollment],
+      local,
+    );
+    return encodeEnrollmentCode(approval);
+  }
+
+  reviewEnrollmentCode(code: string): {
+    deviceName: string;
+    source: "mesh" | "known";
+    keyId: string;
+  } {
+    if (this.signingTrust !== "enrolled" || !this.signingRootKeyId) {
+      throw new Error("Only an enrolled installation can review enrollment requests.");
+    }
+    const request = decodeEnrollmentRequest(code);
+    const installation = this.requireSigningInstallation(request.bindingId);
+    if (installation.deviceId !== request.deviceId) {
+      throw new Error("The enrollment request does not match that configured device.");
+    }
+    return {
+      deviceName: installation.name,
+      source: installation.source,
+      keyId: request.keyId,
+    };
+  }
+
+  async completeEnrollment(code: string): Promise<void> {
+    if (this.signingTrust !== "approval-required" || !this.signingRootKeyId) {
+      throw new Error("This installation is not waiting for enrollment approval.");
+    }
+    const local = this.getLocalSigningRecord();
+    if (!local?.pendingRequest) {
+      throw new Error("Generate an enrollment request on this installation first.");
+    }
+    const approval = decodeEnrollmentApproval(code);
+    await verifyEnrollmentApproval(approval, local);
+    if (approval.rootKeyId !== this.signingRootKeyId) {
+      throw new Error("The approval belongs to a different signing environment.");
+    }
+    if (approval.approvedRevision !== this.signedConfigRevision ||
+        approval.approvedEnvelopeHash !== this.signedConfigHash) {
+      throw new Error(
+        "The signed configuration changed after this approval was created. Generate a new request and approval.",
+      );
+    }
+    const enrolled: LocalDeviceSigningRecord = {
+      ...local,
+      rootKeyId: approval.rootKeyId,
+      pendingApproval: approval,
+      lastAcceptedRevision: approval.approvedRevision,
+      lastAcceptedEnvelopeHash: approval.approvedEnvelopeHash,
+    };
+    this.signingEnrollments = structuredClone(approval.enrollments);
+    this.setLocalSigningRecord(enrolled);
+    this.signingTrust = "enrolled";
+    await this.saveSettings();
+  }
+
   async restoreConfigVersion(version: number): Promise<void> {
     if (!this.secrets) throw new Error("Unlock Tephramesh encryption before restoring a config version.");
     await verifyConfigHistory(this.configHistoryBlocks);
@@ -314,17 +612,9 @@ export default class TephrameshPlugin extends Plugin {
     const legacyShardKey = legacyShardName
       ? this.app.secretStorage.getSecret(legacyShardName)
       : undefined;
-    if (this.settings.shardEncryptionKeyHash && !legacyShardKey) {
-      throw new Error(
-        "The existing shard encryption key is unavailable. Restore it in Obsidian Keychain before migrating.",
-      );
-    }
     migrated.shardEncryptionKey = legacyShardKey ?? "";
     if (!migrated.shardEncryptionKey) {
       migrated.shardEncryptionKey = generateShardPassword();
-      this.settings.shardEncryptionKeyHash = await sha256Hex(
-        migrated.shardEncryptionKey,
-      );
     }
 
     this.settings.instances = this.settings.instances.map((instance) => {
@@ -399,40 +689,190 @@ export default class TephrameshPlugin extends Plugin {
       const recipient = this.settings.ageRecipient;
       const decrypted = await decryptConfigHistory(identity, this.encryptedData);
       let protectedData: TephrameshProtectedData;
-      if (isConfigHistoryEnvelope(decrypted)) {
-        let blocks = decrypted.blocks;
-        let repairedAliasedHistory = false;
-        try {
-          await verifyConfigHistory(blocks);
-        } catch {
-          blocks = await repairAliasedConfigHistory(blocks);
-          repairedAliasedHistory = true;
+      if (isSignedConfigEnvelope(decrypted)) {
+        const verified = await verifySignedConfigEnvelope(decrypted);
+        const local = this.getLocalSigningRecord();
+        let enrolledLocal: LocalDeviceSigningRecord | undefined;
+        let completePendingApproval = false;
+        if (local?.rootKeyId) {
+          if (local.rootKeyId !== verified.envelope.rootKeyId) {
+            throw new Error("The signed configuration uses a different enrollment root.");
+          }
+          assertSignedRevisionAccepted(
+            local,
+            verified.envelope.revision,
+            verified.hash,
+          );
+          const enrollment = verified.envelope.enrollments.find(
+            (candidate) => candidate.keyId === local.keyId,
+          );
+          if (!enrollment) {
+            if (!local.pendingApproval || !local.pendingRequest) {
+              throw new Error("This installation's signing key is not enrolled.");
+            }
+            await verifyEnrollmentApproval(local.pendingApproval, local);
+            if (local.pendingApproval.approvedRevision !== verified.envelope.revision ||
+                local.pendingApproval.approvedEnvelopeHash !== verified.hash) {
+              throw new Error("The pending enrollment approval is stale.");
+            }
+            this.signingEnrollments = structuredClone(
+              local.pendingApproval.enrollments,
+            );
+            completePendingApproval = true;
+          } else if (enrollment.deviceId !== local.deviceId ||
+                     enrollment.bindingId !== local.bindingId) {
+            throw new Error("This installation's signing key has the wrong device binding.");
+          }
+          this.signingTrust = "enrolled";
+          enrolledLocal = {
+            ...local,
+            lastAcceptedRevision: verified.envelope.revision,
+            lastAcceptedEnvelopeHash: verified.hash,
+          };
+        } else {
+          this.signingTrust = "approval-required";
         }
-        this.configHistoryBlocks = blocks.slice(-normalizeConfigHistoryVersions(this.settings.configHistoryVersions));
-        const latest = this.configHistoryBlocks.at(-1)?.config;
-        if (!latest) throw new Error("The Tephramesh configuration history has no versions.");
-        protectedData = latest;
-        this.applyProtectedData(protectedData, recipient);
-        if (repairedAliasedHistory) await this.saveSettings();
+        this.signingRootKeyId = verified.envelope.rootKeyId;
+        if (!completePendingApproval) {
+          this.signingEnrollments = structuredClone(verified.envelope.enrollments);
+        }
+        this.signedConfigRevision = verified.envelope.revision;
+        this.signedConfigHash = verified.hash;
+        const repairedHistory = await this.loadHistoryEnvelope(
+          verified.envelope.history,
+          recipient,
+          true,
+        );
+        if (enrolledLocal) this.setLocalSigningRecord(enrolledLocal);
+        if (completePendingApproval || (repairedHistory && enrolledLocal)) {
+          await this.saveSettings();
+        }
+        return;
+      }
+      if (isConfigHistoryEnvelope(decrypted)) {
+        const local = this.getLocalSigningRecord();
+        if (local?.rootKeyId) {
+          if (local.lastAcceptedRevision) {
+            throw new Error("An unsigned configuration cannot replace signed Tephramesh state.");
+          }
+          const genesis = await createGenesisEnrollment(
+            local.bindingId,
+            local.deviceId,
+            local,
+          );
+          this.signingRootKeyId = local.rootKeyId;
+          this.signingEnrollments = [genesis];
+          this.signingTrust = "enrolled";
+          await this.loadHistoryEnvelope(decrypted, recipient, true);
+          await this.saveSettings();
+          return;
+        }
+        const repairedHistory = await this.loadHistoryEnvelope(
+          decrypted,
+          recipient,
+          true,
+        );
+        if (repairedHistory) await this.saveSettings();
         return;
       } else {
+        if (this.getLocalSigningRecord()?.rootKeyId) {
+          throw new Error("An unsigned configuration cannot replace signed Tephramesh state.");
+        }
         this.configHistoryBlocks = [];
         protectedData = await decryptProtectedData(identity, this.encryptedData);
       }
       this.applyProtectedData(protectedData, recipient);
       return;
     }
+    if (this.getLocalSigningRecord()?.rootKeyId) {
+      throw new Error("Legacy unsigned configuration cannot replace signed Tephramesh state.");
+    }
     this.secrets = await decryptSecrets(identity, this.encryptedData);
     await this.saveSettings();
+  }
+
+  private async loadHistoryEnvelope(
+    history: ConfigHistoryEnvelope,
+    recipient: string,
+    repairLegacyAliasing: boolean,
+  ): Promise<boolean> {
+    let blocks = history.blocks;
+    let repairedAliasedHistory = false;
+    try {
+      await verifyConfigHistory(blocks);
+    } catch {
+      if (!repairLegacyAliasing) {
+        throw new Error(
+          "The signed Tephramesh configuration history failed integrity verification.",
+        );
+      }
+      blocks = await repairAliasedConfigHistory(blocks);
+      repairedAliasedHistory = true;
+    }
+    this.configHistoryBlocks = blocks.slice(
+      -normalizeConfigHistoryVersions(this.settings.configHistoryVersions),
+    );
+    const protectedData = this.configHistoryBlocks.at(-1)?.config;
+    if (!protectedData) {
+      throw new Error("The Tephramesh configuration history has no versions.");
+    }
+    this.applyProtectedData(protectedData, recipient);
+    return repairedAliasedHistory;
+  }
+
+  private resetSigningRuntimeState(): void {
+    this.signingRootKeyId = "";
+    this.signingEnrollments = [];
+    this.signedConfigRevision = 0;
+    this.signedConfigHash = "";
+    this.signingTrust = "unsigned";
+  }
+
+  private getLocalSigningRecord(): LocalDeviceSigningRecord | null {
+    const stored = this.app.secretStorage.getSecret(DEVICE_SIGNING_SECRET_NAME);
+    if (!stored) return null;
+    try {
+      const value = JSON.parse(stored) as Partial<LocalDeviceSigningRecord>;
+      if (value.format !== "tephramesh-local-device-signing-v1" ||
+          !value.bindingId || !value.deviceId || !value.keyId ||
+          !value.publicKey || !value.privateKey) return null;
+      return value as LocalDeviceSigningRecord;
+    } catch {
+      return null;
+    }
+  }
+
+  private setLocalSigningRecord(record: LocalDeviceSigningRecord): void {
+    this.app.secretStorage.setSecret(
+      DEVICE_SIGNING_SECRET_NAME,
+      JSON.stringify(record),
+    );
+  }
+
+  private requireSigningInstallation(bindingId: string): {
+    bindingId: string;
+    deviceId: string;
+    name: string;
+    source: "mesh" | "known";
+  } {
+    const installation = this.getSigningInstallationOptions().find(
+      (candidate) => candidate.bindingId === bindingId,
+    );
+    if (!installation) {
+      throw new Error("Select a configured device or Known device.");
+    }
+    return installation;
   }
 
   private applyProtectedData(protectedData: TephrameshProtectedData, recipient: string): void {
     const protectedCopy = structuredClone(protectedData);
     const {
       globalIgnoreRules: _legacyGlobalIgnoreRules,
+      shardEncryptionKeyHash: _legacyShardEncryptionKeyHash,
       ...storedSettings
     } = protectedCopy.settings as TephrameshProtectedData["settings"] & {
       globalIgnoreRules?: unknown;
+      shardEncryptionKeyHash?: unknown;
     };
     this.settings = {
       ...structuredClone(DEFAULT_SETTINGS),
@@ -606,6 +1046,7 @@ export default class TephrameshPlugin extends Plugin {
   async refreshReconciliation(force = false): Promise<ReconciliationReport> {
     if (this.reconciliationInProgress) return this.reconciliationReport;
     if (
+      this.signingTrust === "approval-required" ||
       !this.settings.onboardingComplete ||
       !this.secretsAreUnlocked() ||
       !this.settings.folderId
@@ -1000,6 +1441,7 @@ export default class TephrameshPlugin extends Plugin {
   private async refreshNoteSyncBadges(): Promise<void> {
     if (this.noteSyncRefreshInProgress) return;
     if (
+      this.signingTrust === "approval-required" ||
       !this.settings.onboardingComplete ||
       !this.secretsAreUnlocked() ||
       !this.settings.folderId
@@ -1244,7 +1686,11 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   async refreshStatuses(forceNameCheck = false): Promise<void> {
-    if (!this.settings.onboardingComplete || !this.secretsAreUnlocked()) return;
+    if (
+      this.signingTrust === "approval-required" ||
+      !this.settings.onboardingComplete ||
+      !this.secretsAreUnlocked()
+    ) return;
     if (this.refreshInProgress) {
       if (forceNameCheck) this.forcedStatusRefreshPending = true;
       return;

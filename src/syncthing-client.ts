@@ -5,15 +5,17 @@ import type {
   SyncthingFolder,
   SyncthingFolderScanProgressEvent,
   SyncthingFolderStatus,
-  SyncthingLocalNeed,
-  SyncthingRemoteNeed,
   SyncthingConnections,
   SyncthingSystemStatus,
   SyncthingVersion,
 } from "./model";
-import { endpointUrl } from "./security";
+import { endpointUrl, validateEndpoint } from "./security";
 import { buildSyncthingFolder } from "./syncthing-folder";
 import { latestFolderScanProgress } from "./syncthing-scan";
+import {
+  collectNeededFileNames,
+  NEEDED_FILES_PER_PAGE,
+} from "./syncthing-pagination";
 
 export class SyncthingApiError extends Error {
   constructor(
@@ -37,6 +39,8 @@ export class SyncthingClient {
     path: string,
     options: Pick<RequestUrlParam, "method" | "body"> = {},
   ): Promise<T> {
+    const endpointError = validateEndpoint(this.endpoint, { onboarding: false });
+    if (endpointError) throw new SyncthingApiError(endpointError);
     const response = await requestUrl({
       url: `${endpointUrl(this.endpoint)}${path}`,
       method: options.method ?? "GET",
@@ -344,32 +348,29 @@ export class SyncthingClient {
     folderId: string,
     deviceId: string,
   ): Promise<string[]> {
-    const perPage = 1000;
-    const names: string[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await this.request<SyncthingRemoteNeed>(
-        `/rest/db/remoteneed?folder=${encodeURIComponent(folderId)}&device=${encodeURIComponent(deviceId)}&page=${page}&perpage=${perPage}`,
-      );
-      names.push(...response.files.map((file) => file.name));
-      if (response.files.length < perPage) return names;
-    }
+    return this.getNeededFileNames(
+      (page) =>
+        `/rest/db/remoteneed?folder=${encodeURIComponent(folderId)}&device=${encodeURIComponent(deviceId)}&page=${page}&perpage=${NEEDED_FILES_PER_PAGE}`,
+      ["files"],
+    );
   }
 
   async getLocalNeededFiles(folderId: string): Promise<string[]> {
-    const perPage = 1000;
-    const names: string[] = [];
-    for (let page = 1; ; page += 1) {
-      const response = await this.request<SyncthingLocalNeed>(
-        `/rest/db/need?folder=${encodeURIComponent(folderId)}&page=${page}&perpage=${perPage}`,
-      );
-      const files = [
-        ...response.progress,
-        ...response.queued,
-        ...response.rest,
-      ];
-      names.push(...files.map((file) => file.name));
-      if (files.length < perPage) return names;
-    }
+    return this.getNeededFileNames(
+      (page) =>
+        `/rest/db/need?folder=${encodeURIComponent(folderId)}&page=${page}&perpage=${NEEDED_FILES_PER_PAGE}`,
+      ["progress", "queued", "rest"],
+    );
+  }
+
+  private async getNeededFileNames(
+    pathForPage: (page: number) => string,
+    fields: string[],
+  ): Promise<string[]> {
+    return collectNeededFileNames(
+      (page) => this.request<unknown>(pathForPage(page)),
+      fields,
+    );
   }
 
   async getFolderScanProgress(

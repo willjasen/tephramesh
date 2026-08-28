@@ -57,6 +57,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private visible = false;
   private configRevealed = false;
   private selectedConfigVersion?: number;
+  private signingSelectedInstanceId?: string;
+  private generatedEnrollmentApproval?: string;
 
   constructor(app: App, private readonly plugin: TephrameshPlugin) {
     super(app, plugin);
@@ -74,6 +76,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     this.visible = false;
     this.configRevealed = false;
     this.selectedConfigVersion = undefined;
+    this.generatedEnrollmentApproval = undefined;
     this.plugin.stopStatusPolling();
   }
 
@@ -235,6 +238,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderSectionTabs(container: HTMLElement): void {
+    const enrollmentRequired =
+      this.plugin.getSigningEnvironmentStatus().state === "approval-required";
+    if (enrollmentRequired) this.activeSection = "config";
     const tabs = container.createDiv({ cls: "tephramesh-tabs" });
     tabs.setAttribute("role", "tablist");
     for (const section of SETTINGS_SECTIONS) {
@@ -245,7 +251,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", String(active));
+      const disabled = enrollmentRequired && section.id !== "config";
+      button.disabled = disabled;
+      button.setAttribute("aria-disabled", String(disabled));
       button.addEventListener("click", () => {
+        if (disabled) return;
         if (this.activeSection === section.id) return;
         if (this.activeSection === "config") {
           this.configRevealed = false;
@@ -390,6 +400,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderConfig(container: HTMLElement): void {
+    const signingState = this.renderSigningEnvironment(container);
+    if (signingState === "approval-required") {
+      this.renderDeleteConfig(container);
+      return;
+    }
     container.createEl("h2", { text: "Config history" });
     container.createEl("p", {
       text: "Inspect saved encrypted snapshots or restore an earlier version. Decrypted views include API keys and the shard encryption key; keep this screen private.",
@@ -469,6 +484,279 @@ export class TephrameshSettingTab extends PluginSettingTab {
     const pre = container.createEl("pre", { cls: "tephramesh-config-json" });
     pre.createEl("code").setText(JSON.stringify(config, null, 2));
     this.renderDeleteConfig(container);
+  }
+
+  private renderSigningEnvironment(
+    container: HTMLElement,
+  ): "unsigned" | "approval-required" | "enrolled" {
+    const status = this.plugin.getSigningEnvironmentStatus();
+    container.createEl("h2", { text: "Configuration signing" });
+    const signingInstallations = this.plugin.getSigningInstallationOptions();
+    const selectedId = signingInstallations.some(
+      (installation) => installation.bindingId === this.signingSelectedInstanceId,
+    )
+      ? this.signingSelectedInstanceId!
+      : signingInstallations[0]?.bindingId ?? "";
+    this.signingSelectedInstanceId = selectedId;
+
+    if (status.state === "unsigned") {
+      container.createEl("p", {
+        text: "This existing encrypted configuration remains compatible but is not yet signed. Initialize signing on exactly one existing Obsidian installation; every other installation must then request approval from an enrolled device.",
+        cls: "tephramesh-config-warning",
+      });
+      new Setting(container)
+        .setName("This installation")
+        .setDesc("Bind this Obsidian installation to its configured Syncthing device. This does not depend on the endpoint hostname.")
+        .addDropdown((dropdown) => {
+          for (const installation of signingInstallations) {
+            dropdown.addOption(
+              installation.bindingId,
+              `${installation.name} · ${shortDeviceId(installation.deviceId)}${installation.source === "known" ? " · Known" : ""}`,
+            );
+          }
+          dropdown.setValue(selectedId).onChange((value) => {
+            this.signingSelectedInstanceId = value;
+          });
+        })
+        .addButton((button) => button
+          .setButtonText("Initialize signing")
+          .setWarning()
+          .setDisabled(!selectedId)
+          .onClick(async () => {
+            button.setDisabled(true).setButtonText("Initializing…");
+            try {
+              await this.plugin.initializeSigningEnvironment(
+                this.signingSelectedInstanceId ?? selectedId,
+              );
+              this.render();
+              showTephrameshNotice(
+                "success",
+                "Configuration signing initialized",
+                "This installation is the enrollment root. Approve every other installation with a manual request code.",
+              );
+            } catch (error) {
+              showTephrameshNotice(
+                "error",
+                "Signing initialization failed",
+                error instanceof Error ? error.message : String(error),
+              );
+              button.setDisabled(false).setButtonText("Initialize signing");
+            }
+          }));
+      return status.state;
+    }
+
+    if (status.state === "approval-required") {
+      container.createEl("p", {
+        text: "This signed configuration is readable, but this Obsidian installation cannot change it until an already enrolled installation approves its signing key.",
+        cls: "tephramesh-config-warning",
+      });
+      const eligibleInstallations = signingInstallations;
+      const enrollmentSelectedId = eligibleInstallations.some(
+        (installation) => installation.bindingId === this.signingSelectedInstanceId,
+      )
+        ? this.signingSelectedInstanceId!
+        : eligibleInstallations[0]?.bindingId ?? "";
+      this.signingSelectedInstanceId = enrollmentSelectedId;
+      new Setting(container)
+        .setName("This installation")
+        .setDesc("Choose the configured Syncthing device represented by this Obsidian installation.")
+        .addDropdown((dropdown) => {
+          for (const installation of eligibleInstallations) {
+            dropdown.addOption(
+              installation.bindingId,
+              `${installation.name} · ${shortDeviceId(installation.deviceId)}${installation.source === "known" ? " · Known" : ""}`,
+            );
+          }
+          dropdown.setValue(enrollmentSelectedId).onChange((value) => {
+            this.signingSelectedInstanceId = value;
+          });
+        })
+        .addButton((button) => button
+          .setButtonText(status.pendingRequestCode ? "Regenerate request" : "Generate request")
+          .setDisabled(!enrollmentSelectedId)
+          .onClick(async () => {
+            try {
+              const code = await this.plugin.generateEnrollmentRequest(
+                this.signingSelectedInstanceId ?? enrollmentSelectedId,
+              );
+              await navigator.clipboard.writeText(code);
+              this.render();
+              showTephrameshNotice(
+                "success",
+                "Enrollment request copied",
+                "Paste it into an enrolled installation's Approve request field.",
+              );
+            } catch (error) {
+              showTephrameshNotice(
+                "error",
+                "Request generation failed",
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+          }));
+      if (status.pendingRequestCode) {
+        new Setting(container)
+          .setName("Enrollment request")
+          .setDesc("Copy this request to an enrolled installation.")
+          .addTextArea((text) => {
+            text.setValue(status.pendingRequestCode!).setDisabled(true);
+            text.inputEl.rows = 4;
+          })
+          .addButton((button) => button.setButtonText("Copy request").onClick(async () => {
+            await navigator.clipboard.writeText(status.pendingRequestCode!);
+            button.setButtonText("Copied");
+          }));
+        let approvalCode = "";
+        new Setting(container)
+          .setName("Enrollment approval")
+          .setDesc("Paste the approval returned by the enrolled installation.")
+          .addTextArea((text) => {
+            text.inputEl.rows = 4;
+            text.setPlaceholder("Paste approval code").onChange((value) => {
+              approvalCode = value.trim();
+            });
+          })
+          .addButton((button) => button.setButtonText("Complete enrollment").setCta().onClick(async () => {
+            button.setDisabled(true).setButtonText("Verifying…");
+            try {
+              await this.plugin.completeEnrollment(approvalCode);
+              this.render();
+              showTephrameshNotice(
+                "success",
+                "Installation enrolled",
+                "This installation can now verify and sign Tephramesh configuration updates.",
+              );
+            } catch (error) {
+              showTephrameshNotice(
+                "error",
+                "Enrollment failed",
+                error instanceof Error ? error.message : String(error),
+              );
+              button.setDisabled(false).setButtonText("Complete enrollment");
+            }
+          }));
+      }
+      return status.state;
+    }
+
+    container.createEl("p", {
+      text: `Enrolled as ${status.localInstallationName ?? "this installation"} · signed revision ${status.revision}. ${status.authenticatedInstallations.length} installation signing key${status.authenticatedInstallations.length === 1 ? "" : "s"} enrolled.`,
+      cls: "setting-item-description",
+    });
+    container.createEl("h3", { text: "Authenticated installations" });
+    const authenticatedList = container.createDiv({
+      cls: "tephramesh-authenticated-list",
+    });
+    for (const installation of status.authenticatedInstallations) {
+      const role = installation.source === "mesh"
+        ? "Active device"
+        : installation.source === "known"
+          ? "Known device"
+          : "No longer configured";
+      const approvedBy = installation.isEnrollmentRoot
+        ? "Enrollment root"
+        : `Approved by ${installation.approvedByName ?? "an enrolled installation"}`;
+      const authenticatedAt = new Date(installation.createdAt);
+      const authenticatedLabel = Number.isNaN(authenticatedAt.getTime())
+        ? installation.createdAt
+        : authenticatedAt.toLocaleString();
+      const authenticatedSetting = new Setting(authenticatedList)
+        .setName(installation.name)
+        .setDesc(
+          `Device ${shortDeviceId(installation.deviceId)} · Key ${installation.keyId.slice(0, 12)} · ${approvedBy} · ${authenticatedLabel}`,
+        );
+      authenticatedSetting.settingEl.addClass(
+        "tephramesh-authenticated-installation",
+        `is-${installation.source}`,
+      );
+      if (installation.isLocal) {
+        authenticatedSetting.settingEl.addClass("is-local");
+      }
+      authenticatedSetting.nameEl.empty();
+      authenticatedSetting.nameEl.createSpan({
+        text: role,
+        cls: `tephramesh-authenticated-role is-${installation.source}`,
+      });
+      authenticatedSetting.nameEl.appendText(` ${installation.name}`);
+      if (installation.isLocal) {
+        authenticatedSetting.nameEl.createSpan({
+          text: "This installation",
+          cls: "tephramesh-authenticated-marker is-local",
+        });
+      }
+      if (installation.isEnrollmentRoot) {
+        authenticatedSetting.nameEl.createSpan({
+          text: "Root",
+          cls: "tephramesh-authenticated-marker is-root",
+        });
+      }
+    }
+    let requestCode = "";
+    let reviewedCode = "";
+    let reviewButton: ButtonComponent | undefined;
+    new Setting(container)
+      .setName("Approve another installation")
+      .setDesc("Paste the request generated on the other installation. Review its device and key before approving it.")
+      .addTextArea((text) => {
+        text.inputEl.rows = 4;
+        text.setPlaceholder("Paste enrollment request").onChange((value) => {
+          requestCode = value.trim();
+          reviewedCode = "";
+          reviewButton?.setDisabled(!requestCode);
+        });
+      })
+      .addButton((button) => {
+        reviewButton = button;
+        return button.setButtonText("Review request").setDisabled(true).onClick(async () => {
+        button.setDisabled(true).setButtonText("Signing…");
+        try {
+          if (reviewedCode !== requestCode) {
+            const review = this.plugin.reviewEnrollmentCode(requestCode);
+            reviewedCode = requestCode;
+            button.setDisabled(false).setButtonText(`Approve ${review.deviceName}`);
+            showTephrameshNotice(
+              "warning",
+              "Review enrollment request",
+              `${review.deviceName} · ${review.source === "known" ? "Known device" : "Active device"} · signing key ${review.keyId.slice(0, 12)}. Click Approve only if this is the installation you expect.`,
+            );
+            return;
+          }
+          const approval = await this.plugin.approveEnrollmentCode(requestCode);
+          await navigator.clipboard.writeText(approval);
+          this.generatedEnrollmentApproval = approval;
+          this.render();
+          showTephrameshNotice(
+            "success",
+            "Enrollment approval copied",
+            "The approval is also displayed below. Paste it into the requesting installation's Enrollment approval field.",
+          );
+          return;
+        } catch (error) {
+          showTephrameshNotice(
+            "error",
+            "Approval failed",
+            error instanceof Error ? error.message : String(error),
+          );
+          button.setDisabled(false).setButtonText("Review request");
+          reviewedCode = "";
+        }
+        });
+      });
+    if (this.generatedEnrollmentApproval) {
+      new Setting(container)
+        .setName("Enrollment approval")
+        .setDesc("Copy this signed response back to the requesting installation to finish enrollment.")
+        .addTextArea((text) => {
+          text.setValue(this.generatedEnrollmentApproval!).setDisabled(true);
+          text.inputEl.rows = 4;
+        })
+        .addButton((button) => button.setButtonText("Copy approval").setCta().onClick(async () => {
+          await navigator.clipboard.writeText(this.generatedEnrollmentApproval!);
+          button.setButtonText("Copied");
+        }));
+    }
+    return status.state;
   }
 
   private renderDeleteConfig(container: HTMLElement): void {

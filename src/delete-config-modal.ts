@@ -19,7 +19,7 @@ export class DeleteConfigModal extends Modal {
       text: "This permanently erases Tephramesh's encrypted plugin data for this vault, including its instance list, API keys, and shard encryption key.",
     });
     contentEl.createEl("p", {
-      text: "Syncthing configuration and vault files will not be changed. The private age identity will remain in this device's Obsidian Keychain.",
+      text: "Syncthing configuration and vault files will not be changed. The private age identity will remain in this device's Obsidian Keychain, while this installation's device signing key and enrollment binding will be reset.",
       cls: "setting-item-description",
     });
 

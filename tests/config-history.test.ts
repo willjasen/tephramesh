@@ -32,6 +32,15 @@ describe("encrypted configuration history", () => {
     await expect(verifyConfigHistory([{ ...second, configHash: "tampered" },])).rejects.toThrow(/integrity/i);
   });
 
+  it("isolates a saved snapshot from later runtime mutations", async () => {
+    const running = structuredClone(config);
+    const block = await createConfigHistoryBlock(running);
+    running.secrets.shardEncryptionKey = "changed after save";
+
+    expect(block.config.secrets.shardEncryptionKey).toBe("");
+    await expect(verifyConfigHistory([block])).resolves.toBeUndefined();
+  });
+
   it("repairs config mutations only when the stored chain metadata remains intact", async () => {
     const first = await createConfigHistoryBlock(config);
     const second = await createConfigHistoryBlock(

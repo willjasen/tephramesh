@@ -30,14 +30,48 @@ export function validateEndpoint(
   endpoint: Endpoint,
   options: { onboarding: boolean },
 ): string | null {
-  if (!endpoint.hostname.trim()) return "Hostname is required.";
+  if (endpoint.protocol !== "http" && endpoint.protocol !== "https") {
+    return "The Syncthing URL must use HTTP or HTTPS.";
+  }
+  const hostname = endpoint.hostname.trim();
+  if (!hostname) return "Hostname is required.";
+  if (/[@/?#\\%\s]/u.test(hostname)) {
+    return "Enter only a hostname, without credentials or other URL syntax.";
+  }
   if (!Number.isInteger(endpoint.port) || endpoint.port < 1 || endpoint.port > 65535) {
     return "Port must be between 1 and 65535.";
   }
-  if (options.onboarding && !isLoopbackHostname(endpoint.hostname)) {
+
+  let parsed: URL;
+  try {
+    parsed = new URL(endpointUrl(endpoint));
+  } catch {
+    return "Enter a valid Syncthing URL.";
+  }
+  if (parsed.username || parsed.password) {
+    return "The hostname cannot contain credentials or other URL syntax.";
+  }
+  const parsedHostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const effectivePort = parsed.port
+    ? Number(parsed.port)
+    : endpoint.protocol === "https"
+      ? 443
+      : 80;
+  if (effectivePort !== endpoint.port) {
+    return "Enter a valid hostname and port.";
+  }
+  if (parsed.search || parsed.hash) {
+    return "The Syncthing URL path cannot contain a query or fragment.";
+  }
+  const normalizedPath = normalizeEndpointPath(endpoint.path ?? "");
+  if (normalizeEndpointPath(parsed.pathname) !== normalizedPath) {
+    return "Enter a valid Syncthing URL path.";
+  }
+
+  if (options.onboarding && !isLoopbackHostname(parsedHostname)) {
     return "The first instance must use localhost or another loopback address.";
   }
-  if (!isLoopbackHostname(endpoint.hostname) && endpoint.protocol !== "https") {
+  if (!isLoopbackHostname(parsedHostname) && endpoint.protocol !== "https") {
     return "Remote Syncthing APIs must use HTTPS.";
   }
   return null;

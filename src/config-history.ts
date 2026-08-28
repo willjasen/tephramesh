@@ -44,12 +44,13 @@ export async function createConfigHistoryBlock(
   config: TephrameshProtectedData,
   previous?: ConfigHistoryBlock,
 ): Promise<ConfigHistoryBlock> {
+  const snapshot = structuredClone(config);
   const version = (previous?.version ?? 0) + 1;
   const previousHash = previous?.hash ?? null;
-  const configHash = await sha256Hex(JSON.stringify(config));
+  const configHash = await sha256Hex(JSON.stringify(snapshot));
   const savedAt = new Date().toISOString();
   const hash = await configBlockHash(version, previousHash, configHash, savedAt);
-  return { version, previousHash, configHash, hash, savedAt, config };
+  return { version, previousHash, configHash, hash, savedAt, config: snapshot };
 }
 
 export async function verifyConfigHistory(blocks: ConfigHistoryBlock[]): Promise<void> {
@@ -132,7 +133,7 @@ export function isConfigHistoryEnvelope(value: unknown): value is ConfigHistoryE
     Array.isArray((value as { blocks?: unknown }).blocks);
 }
 
-export async function encryptConfigHistory(recipient: string, history: ConfigHistoryEnvelope): Promise<string> {
+export async function encryptConfigHistory(recipient: string, history: unknown): Promise<string> {
   const encrypter = new Encrypter();
   encrypter.addRecipient(recipient.trim());
   const bytes = await encrypter.encrypt(JSON.stringify(history));

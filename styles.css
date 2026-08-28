@@ -117,6 +117,74 @@
   background: var(--color-yellow);
   color: #1f1f1f;
 }
+
+.tephramesh-authenticated-list {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  margin-bottom: var(--size-4-5);
+  overflow: hidden;
+}
+
+.tephramesh-authenticated-installation.setting-item {
+  border-left: 3px solid var(--interactive-accent);
+  padding-left: var(--size-4-3);
+}
+
+.tephramesh-authenticated-installation.is-known.setting-item {
+  border-left-color: var(--color-yellow);
+}
+
+.tephramesh-authenticated-installation.is-unconfigured.setting-item {
+  border-left-color: var(--color-red);
+}
+
+.tephramesh-authenticated-installation.is-local.setting-item {
+  background: color-mix(in srgb, var(--color-green) 8%, transparent);
+}
+
+.tephramesh-authenticated-role,
+.tephramesh-authenticated-marker {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  line-height: 1.4;
+  margin-right: var(--size-4-2);
+  padding: 0 var(--size-4-2);
+  vertical-align: 0.08em;
+}
+
+.tephramesh-authenticated-role {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.tephramesh-authenticated-role.is-known {
+  background: var(--color-yellow);
+  color: #1f1f1f;
+}
+
+.tephramesh-authenticated-role.is-unconfigured {
+  background: var(--color-red);
+  color: var(--text-on-accent);
+}
+
+.tephramesh-authenticated-marker {
+  margin-left: var(--size-4-2);
+  margin-right: 0;
+}
+
+.tephramesh-authenticated-marker.is-local {
+  background: var(--color-green);
+  color: #1f1f1f;
+}
+
+.tephramesh-authenticated-marker.is-root {
+  background: var(--color-blue);
+  color: #1f1f1f;
+}
+
 .tephramesh-known-button {
   margin-left: 0.5em;
 }

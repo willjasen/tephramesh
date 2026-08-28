@@ -42,10 +42,52 @@ describe("endpoint security", () => {
     ).toMatch(/HTTPS/);
   });
 
+  it("rejects URL syntax injected through endpoint components", () => {
+    for (const hostname of [
+      "trusted.example@attacker.example",
+      "trusted.example/path",
+      "trusted.example?redirect=attacker.example",
+      "trusted.example#attacker.example",
+      "trusted.example\\attacker.example",
+    ]) {
+      expect(
+        validateEndpoint(
+          { protocol: "https", hostname, port: 443 },
+          { onboarding: false },
+        ),
+      ).not.toBeNull();
+    }
+  });
+
+  it("rejects query, fragment, and separator syntax injected through the path component", () => {
+    for (const path of [
+      "/syncthing?redirect=attacker.example",
+      "/syncthing#attacker.example",
+      "/syncthing\\rest",
+    ]) {
+      expect(
+        validateEndpoint(
+          { protocol: "https", hostname: "sync.example.com", port: 443, path },
+          { onboarding: false },
+        ),
+      ).not.toBeNull();
+    }
+  });
+
   it("formats IPv6 endpoints", () => {
     expect(endpointUrl({ protocol: "http", hostname: "::1", port: 8384 })).toBe(
       "http://[::1]:8384",
     );
+    expect(
+      validateEndpoint(
+        {
+          protocol: "http",
+          hostname: "0:0:0:0:0:0:0:1",
+          port: 8384,
+        },
+        { onboarding: true },
+      ),
+    ).toBeNull();
   });
 
   it("parses and formats a reverse-proxied Syncthing URL", () => {
@@ -61,6 +103,7 @@ describe("endpoint security", () => {
     expect(endpointUrl(endpoint)).toBe(
       "https://wax.seedhost.eu:443/overgrownbobcat/syncthing",
     );
+    expect(validateEndpoint(endpoint, { onboarding: false })).toBeNull();
   });
 
   it("normalizes URL paths and rejects credentials, queries, and fragments", () => {

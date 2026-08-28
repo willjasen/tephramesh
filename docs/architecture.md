@@ -15,7 +15,17 @@ The shard encryption key belongs only on devices. A shard stores and exchanges t
 
 API keys are administrative credentials. Tephramesh stores its entire operational state and secrets in one versioned age-encrypted payload. New configurations generate a dedicated hybrid ML-KEM-768 + X25519 age identity locally; classic and post-quantum native age identities can also be imported. The plaintext envelope contains only `schemaVersion`, the public recipient, and Base64 ciphertext. Each Obsidian installation stores the matching private identity locally in Keychain under `tephramesh-age-identity`. A copied `data.json` reveals neither topology nor API access without that identity.
 
-Age setup also generates the mesh's `sk-` shard encryption key automatically. The key and its SHA-256 fingerprint are included in the protected payload before the first save; a legacy key is preserved during migration.
+Age setup also generates the mesh's `sk-` shard encryption key automatically. The key is included in the protected payload before the first save; legacy keys are preserved during migration.
+
+## Configuration signing and installation enrollment
+
+Age encryption keeps the synchronized configuration confidential, while a separate installation-specific signing key authenticates changes. Each Obsidian installation generates a P-256 key locally and stores its private key, device binding, pinned enrollment root, and last accepted signed revision in Obsidian Keychain. The private key never enters `data.json`. Public keys, enrollment certificates, the signer identity, and the signature live inside the age-encrypted payload, so the plaintext envelope remains unchanged.
+
+The first installation explicitly initializes signing for an existing unsigned configuration and becomes the enrollment root. A new installation displays a manual request code. An already enrolled installation validates that the request names an active or Known Syncthing device, signs the new public key and current configuration anchor, and returns a manual approval code. The new installation pins the approval before it can save. This exchange does not poll localhost or synchronize an unsigned request.
+
+Signing authority is an Obsidian-installation role, not a mesh API role. An installation represented by a Known device, such as an iPhone that cannot expose a Syncthing REST endpoint to Tephramesh, can still enroll and sign configuration changes. Its full Syncthing device ID supplies the stable binding; changing an endpoint URL has no effect on that binding. Shards cannot receive signing authority.
+
+Signed envelopes carry a monotonic revision. Every enrolled installation stores the last accepted revision and envelope hash locally, rejects lower revisions, and rejects a different envelope at the same revision. A newly synced but unenrolled installation is confined to the enrollment screen and suspends mesh API activity until approval.
 
 ## Why the folder ID is global and paths are local
 
