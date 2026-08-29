@@ -78,6 +78,7 @@ import {
   type LocalDeviceSigningRecord,
 } from "./config-signing";
 import { createConfigJournalRecord, isConfigJournalRecord, type ConfigJournalRecord } from "./config-journal";
+import { DebugLogger } from "./debug-logger";
 
 interface EncryptedSettingsEnvelope {
   schemaVersion: 3;
@@ -133,6 +134,10 @@ export default class TephrameshPlugin extends Plugin {
   private noteScanDebounceTimers = new Map<string, number>();
   private pendingNoteScans = new Set<string>();
   private noteScanQueueInProgress = false;
+  private readonly debugLogger = new DebugLogger(
+    this.app.vault.adapter,
+    `${this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`}`,
+  );
   private settingTab!: TephrameshSettingTab;
   private statusBarItem?: HTMLElement;
   private statusBarTimer?: number;
@@ -2626,6 +2631,12 @@ export default class TephrameshPlugin extends Plugin {
     checkMetadata = true,
   ): Promise<boolean> {
     let nameChanged = false;
+    const debug = async (message: string, details?: unknown) => {
+      if (instance.kind === "device" && instance.debugEnabled) {
+        await this.debugLogger.write(instance.deviceId, message, details);
+      }
+    };
+    void debug("status check started", { metadata: checkMetadata });
     try {
       const apiKey = this.getApiKey(instance.id);
       if (!apiKey) throw new Error("API key is unavailable in the encrypted configuration");
@@ -2727,12 +2738,14 @@ export default class TephrameshPlugin extends Plugin {
         peerConnections,
         ...rates,
       });
+      void debug("status check completed", { ok: true });
     } catch (error) {
       this.runtimeStatuses.set(instance.id, {
         checkedAt: Date.now(),
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       });
+      void debug("status check failed", { error: error instanceof Error ? error.message : String(error) });
     }
     if (render) {
       if (nameChanged) {
@@ -2743,6 +2756,15 @@ export default class TephrameshPlugin extends Plugin {
       this.updateStatusBar();
     }
     return nameChanged;
+  }
+
+  async setInstanceDebugEnabled(instance: MeshInstance, enabled: boolean): Promise<void> {
+    if (this.signingTrust !== "enrolled") {
+      throw new Error("Configuration signing must be enrolled before changing debug mode.");
+    }
+    if (instance.kind !== "device") throw new Error("Debug mode is available only for devices.");
+    instance.debugEnabled = enabled;
+    await this.saveSettings();
   }
 
   async setInstanceFolderPaused(

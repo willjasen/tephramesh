@@ -23,6 +23,8 @@ export interface MeshInstance {
   deviceId: string;
   folderPath: string;
   pullOrder?: SyncthingPullOrder;
+  /** Enables local diagnostic logging for this device. */
+  debugEnabled?: boolean;
   setupState?: "pending";
 }
 
