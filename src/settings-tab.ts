@@ -953,6 +953,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
         operatingSystem,
         this.plugin.runtimeStatuses.get(instance.id),
       );
+      this.renderSigningBadge(setting.nameEl, instance.deviceId);
       setting.nameEl.createSpan({
         text: ` · ${shortDeviceId(instance.deviceId)}`,
         cls: "tephramesh-instance-heading-meta",
@@ -1095,7 +1096,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       setting.nameEl.empty();
       setting.nameEl.appendText(` ${known.name}`);
       setting.nameEl.createSpan({ text: ` · ${shortDeviceId(known.deviceId)}`, cls: "tephramesh-instance-heading-meta" });
-      setting.descEl.setText("A trusted Syncthing peer outside the Tephramesh mesh.");
+      this.renderSigningBadge(setting.nameEl, known.deviceId);
       setting.addButton((button) =>
         button
           .setIcon("trash-2")
@@ -1115,6 +1116,22 @@ export class TephrameshSettingTab extends PluginSettingTab {
       );
       }
     }
+  }
+
+  private renderSigningBadge(container: HTMLElement, deviceId: string): void {
+    const state = this.plugin.getSigningStatusForDevice(deviceId);
+    if (state === "unsigned") return;
+    const badge = container.createSpan({
+      cls: `tephramesh-signing-badge is-${state}`,
+      text: state === "signed" ? "Signed" : "Pending signing",
+    });
+    badge.setAttribute(
+      "aria-label",
+      state === "signed"
+        ? "This installation is enrolled for configuration signing."
+        : "This installation has a pending configuration-signing enrollment request.",
+    );
+    badge.setAttribute("title", badge.getAttribute("aria-label")!);
   }
 
   private openInstanceModal(kind: InstanceKind): void {

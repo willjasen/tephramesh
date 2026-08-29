@@ -436,6 +436,15 @@ export default class TephrameshPlugin extends Plugin {
     };
   }
 
+  getSigningStatusForDevice(deviceId: string): "signed" | "pending" | "unsigned" {
+    const status = this.getSigningEnvironmentStatus();
+    if (status.authenticatedInstallations.some((installation) => installation.deviceId === deviceId)) {
+      return "signed";
+    }
+    if (status.pendingInstallation?.deviceId === deviceId) return "pending";
+    return "unsigned";
+  }
+
   getSigningInstallationOptions(): Array<{
     bindingId: string;
     deviceId: string;

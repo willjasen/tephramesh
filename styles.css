@@ -66,9 +66,10 @@
 }
 
 .tephramesh-instance-card.setting-item {
+  align-items: center;
   min-height: 0;
-  padding-bottom: 0;
-  padding-top: var(--size-4-6);
+  padding-bottom: var(--size-4-4);
+  padding-top: var(--size-4-4);
 }
 
 .tephramesh-instance-section {
@@ -116,6 +117,24 @@
 .tephramesh-instance-heading-meta {
   color: var(--text-muted);
   font-weight: var(--font-normal);
+}
+
+.tephramesh-signing-badge {
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  margin-left: var(--size-4-2);
+  padding: 0.15em 0.45em;
+}
+
+.tephramesh-signing-badge.is-signed {
+  background: var(--background-modifier-success);
+  color: #000;
+}
+
+.tephramesh-signing-badge.is-pending {
+  background: var(--background-modifier-warning);
+  color: var(--text-normal);
 }
 
 .tephramesh-instance-name-link,
