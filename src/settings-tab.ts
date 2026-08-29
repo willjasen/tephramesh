@@ -1745,11 +1745,12 @@ export class TephrameshSettingTab extends PluginSettingTab {
     }
     const folder = status.folder;
     const pending = folder.needFiles ?? 0;
+    const pendingText = pending > 0 ? ` · ${pending} pending` : "";
     const updated = `updated ${formatFolderUpdatedAt(folder.stateChanged)}`;
     if (status.folderPaused) {
       element.addClass("is-paused");
       element.createDiv({
-        text: `paused · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending · ${updated}`,
+        text: `paused${pendingText} · ${updated}`,
       });
       this.renderPendingFiles(element, status.pendingFiles);
       return;
@@ -1758,7 +1759,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       element.addClass("is-scanning");
       const progress = folder.scanProgress;
       element.createDiv({
-        text: `scanning · ${progress === undefined ? "calculating…" : `${progress}%`} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${updated}`,
+        text: `scanning · ${progress === undefined ? "calculating…" : `${progress}%`}${pendingText} · ${updated}`,
       });
       this.renderPendingFiles(element, status.pendingFiles);
       return;
@@ -1769,13 +1770,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
     if (folder.state === "syncing") {
       const progress = syncProgress(folder);
       element.createDiv({
-        text: `syncing · ${progress === undefined ? "calculating…" : `${progress}%`} · ↓ ${formatTransferRate(status.downloadBytesPerSecond)} · ↑ ${formatTransferRate(status.uploadBytesPerSecond)} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending · ${updated}`,
+        text: `syncing · ${progress === undefined ? "calculating…" : `${progress}%`} · ↓ ${formatTransferRate(status.downloadBytesPerSecond)} · ↑ ${formatTransferRate(status.uploadBytesPerSecond)}${pendingText} · ${updated}`,
       });
       this.renderPendingFiles(element, status.pendingFiles);
       return;
     }
     element.createDiv({
-      text: `${folder.state} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending · ${updated}`,
+      text: `${folder.state}${pendingText} · ${updated}`,
     });
     this.renderPendingFiles(element, status.pendingFiles);
   }
