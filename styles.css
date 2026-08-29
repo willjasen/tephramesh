@@ -643,7 +643,7 @@ button.tephramesh-approve-button:hover {
   align-items: center;
   background: var(--background-primary);
   border-radius: 999px;
-  color: var(--color-blue, #59c2ff);
+  color: var(--text-warning, #e0b152);
   display: inline-flex;
   font-size: 8px;
   font-weight: var(--font-semibold);
