@@ -1,10 +1,4 @@
-import {
-  App,
-  ButtonComponent,
-  PluginSettingTab,
-  Setting,
-  setIcon,
-} from "obsidian";
+import { App, ButtonComponent, PluginSettingTab, Setting, setIcon } from "obsidian";
 import type TephrameshPlugin from "./main";
 import { coherentOfflineTimeoutSeconds, type InstanceKind, type InstanceRuntimeStatus, type MeshInstance } from "./model";
 import {
@@ -36,6 +30,7 @@ import { operatingSystemPresentation } from "./platform";
 import { RestoreConfigVersionModal } from "./restore-config-version-modal";
 import { ResolveConfigConflictModal } from "./resolve-config-conflict-modal";
 import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
+import { ApproveEnrollmentModal } from "./approve-enrollment-modal";
 
 function formatFolderUpdatedAt(stateChanged: string | undefined): string {
   if (!stateChanged) return "unknown";
@@ -313,13 +308,19 @@ export class TephrameshSettingTab extends PluginSettingTab {
         });
       } else if (section.id === "auth") {
         const signingStatus = this.plugin.getSigningEnvironmentStatus();
+        const hasPendingInstallation = Boolean(this.pendingApprovedInstallation) ||
+          (signingStatus.state === "enrolled" &&
+            this.plugin.getSigningInstallationOptions().length > 0);
         const allAccepted = signingStatus.state === "enrolled" &&
           signingStatus.enrolledCount > 0 &&
-          signingStatus.acceptedCount === signingStatus.enrolledCount;
+          signingStatus.acceptedCount === signingStatus.enrolledCount &&
+          !hasPendingInstallation;
         const indicator = button.createSpan({
           cls: `tephramesh-topology-indicator tephramesh-tab-indicator${allAccepted ? "" : " is-warning"}`,
         });
-        const acceptanceLabel = signingStatus.state !== "enrolled"
+        const acceptanceLabel = hasPendingInstallation
+          ? "A device is pending configuration-signing enrollment"
+          : signingStatus.state !== "enrolled"
           ? "This installation is not enrolled for configuration signing"
           : allAccepted
             ? `All ${signingStatus.enrolledCount} enrolled installations accepted signed revision ${signingStatus.revision}`
@@ -780,6 +781,25 @@ export class TephrameshSettingTab extends PluginSettingTab {
               );
               button.setDisabled(false).setButtonText("Complete enrollment");
             }
+          }))
+          .addButton((button) => button.setButtonText("Apply cancellation").setWarning().onClick(async () => {
+            button.setDisabled(true).setButtonText("Verifying…");
+            try {
+              await this.plugin.applyEnrollmentCancellation(approvalCode);
+              this.render();
+              showTephrameshNotice(
+                "success",
+                "Enrollment request cancelled",
+                "This installation can generate a new request when needed.",
+              );
+            } catch (error) {
+              showTephrameshNotice(
+                "error",
+                "Cancellation failed",
+                error instanceof Error ? error.message : String(error),
+              );
+              button.setDisabled(false).setButtonText("Apply cancellation");
+            }
           }));
       }
       return status.state;
@@ -840,6 +860,30 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       pendingSetting.nameEl.appendText(` ${pending.deviceName}`);
     }
+    const awaitingInstallations = this.plugin.getSigningInstallationOptions().filter(
+      (installation) =>
+        !this.pendingApprovedInstallation ||
+        (installation.bindingId !== this.pendingApprovedInstallation.bindingId &&
+          installation.deviceId !== this.pendingApprovedInstallation.deviceId),
+    );
+    for (const installation of awaitingInstallations) {
+      const role = installation.source === "mesh" ? "Device" : "Known";
+      const awaitingSetting = new Setting(authenticatedList)
+        .setName(installation.name)
+        .setDesc(
+          `${role} · Device ${shortDeviceId(installation.deviceId)} · Awaiting enrollment request`,
+        );
+      awaitingSetting.settingEl.addClass(
+        "tephramesh-authenticated-installation",
+        "is-pending",
+      );
+      awaitingSetting.nameEl.empty();
+      awaitingSetting.nameEl.createSpan({
+        text: "Awaiting request",
+        cls: "tephramesh-authenticated-role is-pending",
+      });
+      awaitingSetting.nameEl.appendText(` ${installation.name}`);
+    }
     for (const installation of status.authenticatedInstallations) {
       const role = installation.source === "mesh"
         ? "Device"
@@ -883,67 +927,34 @@ export class TephrameshSettingTab extends PluginSettingTab {
           cls: "tephramesh-authenticated-marker is-root",
         });
       }
-      authenticatedSetting.nameEl.createSpan({
-        text: installation.acceptedCurrentConfig ? "Accepted" : "Waiting",
-        cls: `tephramesh-authenticated-marker ${installation.acceptedCurrentConfig ? "is-accepted" : "is-waiting"}`,
-      });
+      if (!installation.acceptedCurrentConfig) {
+        authenticatedSetting.nameEl.createSpan({
+          text: "Waiting",
+          cls: "tephramesh-authenticated-marker is-waiting",
+        });
+      }
     }
-    let requestCode = "";
-    let reviewedCode = "";
-    let reviewButton: ButtonComponent | undefined;
     new Setting(container)
       .setName("Approve another installation")
       .setDesc("Paste the request generated on the other installation. Review its device and key before approving it.")
-      .addTextArea((text) => {
-        text.inputEl.rows = 4;
-        text.setPlaceholder("Paste enrollment request").onChange((value) => {
-          requestCode = value.trim();
-          reviewedCode = "";
-          reviewButton?.buttonEl.removeClass("tephramesh-approve-button");
-          reviewButton?.setDisabled(!requestCode);
-        });
-      })
-      .addButton((button) => {
-        reviewButton = button;
-        return button.setButtonText("Review request").setDisabled(true).onClick(async () => {
-        button.setDisabled(true).setButtonText("Signing…");
-        try {
-          if (reviewedCode !== requestCode) {
-            const review = this.plugin.reviewEnrollmentCode(requestCode);
-            reviewedCode = requestCode;
-            button.buttonEl.addClass("tephramesh-approve-button");
-            button.setDisabled(false).setButtonText(`Approve ${review.deviceName}`);
-            showTephrameshNotice(
-              "warning",
-              "Review enrollment request",
-              `${review.deviceName} · ${review.source === "known" ? "Known device" : "Active device"} · signing key ${review.keyId.slice(0, 12)}. Click Approve only if this is the installation you expect.`,
-            );
-            return;
-          }
-          const approval = await this.plugin.approveEnrollmentCode(requestCode);
-          const approvedInstallation = this.plugin.reviewEnrollmentCode(requestCode);
-          await navigator.clipboard.writeText(approval);
-          this.generatedEnrollmentApproval = approval;
-          this.pendingApprovedInstallation = approvedInstallation;
-          this.render();
-          showTephrameshNotice(
-            "success",
-            "Enrollment approval copied",
-            "Use the pending device's Copy approval button if you need to copy it again.",
-          );
-          return;
-        } catch (error) {
-          showTephrameshNotice(
-            "error",
-            "Approval failed",
-            error instanceof Error ? error.message : String(error),
-          );
-          button.setDisabled(false).setButtonText("Review request");
-          button.buttonEl.removeClass("tephramesh-approve-button");
-          reviewedCode = "";
-        }
-        });
-      });
+      .addButton((button) => button.setButtonText("Open approval window").setCta().onClick(() => {
+        new ApproveEnrollmentModal(
+          this.app,
+          this.plugin,
+          (approval, installation) => {
+            this.generatedEnrollmentApproval = approval;
+            this.pendingApprovedInstallation = installation;
+            this.render();
+          },
+          (_cancellation, installation) => {
+            if (this.pendingApprovedInstallation?.deviceId === installation.deviceId) {
+              this.generatedEnrollmentApproval = undefined;
+              this.pendingApprovedInstallation = undefined;
+            }
+            this.render();
+          },
+        ).open();
+      }));
     return status.state;
   }
 

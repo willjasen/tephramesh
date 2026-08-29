@@ -43,6 +43,16 @@ export interface DeviceEnrollmentApproval {
   signature: string;
 }
 
+export interface DeviceEnrollmentCancellation {
+  format: "tephramesh-device-enrollment-cancellation-v1";
+  rootKeyId: string;
+  request: DeviceEnrollmentRequest;
+  enrollments: DeviceEnrollment[];
+  cancelledByKeyId: string;
+  cancelledAt: string;
+  signature: string;
+}
+
 export interface SignedConfigEnvelope {
   format: "tephramesh-signed-config-v1";
   rootKeyId: string;
@@ -342,6 +352,37 @@ function enrollmentApprovalPayload(
   return payload;
 }
 
+function enrollmentCancellationPayload(
+  cancellation: DeviceEnrollmentCancellation,
+): Omit<DeviceEnrollmentCancellation, "signature"> {
+  const { signature: _signature, ...payload } = cancellation;
+  return payload;
+}
+
+export async function createEnrollmentCancellation(
+  rootKeyId: string,
+  request: DeviceEnrollmentRequest,
+  enrollments: DeviceEnrollment[],
+  approver: LocalDeviceSigningRecord,
+): Promise<DeviceEnrollmentCancellation> {
+  validateEnrollmentRequest(request);
+  await verifyEnrollmentChain(enrollments, rootKeyId);
+  await assertSigningKeyPair(approver);
+  const signer = enrollments.find((enrollment) => enrollment.keyId === approver.keyId);
+  if (approver.rootKeyId !== rootKeyId || !signer || signer.publicKey !== approver.publicKey) {
+    throw new Error("This installation cannot cancel that enrollment request.");
+  }
+  const unsigned = {
+    format: "tephramesh-device-enrollment-cancellation-v1" as const,
+    rootKeyId,
+    request: structuredClone(request),
+    enrollments: structuredClone(enrollments),
+    cancelledByKeyId: approver.keyId,
+    cancelledAt: new Date().toISOString(),
+  };
+  return { ...unsigned, signature: await signValue(unsigned, approver.privateKey) };
+}
+
 export async function createEnrollmentApproval(
   rootKeyId: string,
   approvedRevision: number,
@@ -541,8 +582,46 @@ export function isSignedConfigEnvelope(value: unknown): value is SignedConfigEnv
     typeof candidate.signature === "string";
 }
 
-export function encodeEnrollmentCode(value: DeviceEnrollmentRequest | DeviceEnrollmentApproval): string {
+export function encodeEnrollmentCode(value: DeviceEnrollmentRequest | DeviceEnrollmentApproval | DeviceEnrollmentCancellation): string {
   return bytesToBase64Url(new TextEncoder().encode(canonicalJson(value)));
+}
+
+export function decodeEnrollmentCancellation(code: string): DeviceEnrollmentCancellation {
+  const value = decodeEnrollmentCode(code);
+  if (!value || typeof value !== "object" ||
+      (value as { format?: unknown }).format !== "tephramesh-device-enrollment-cancellation-v1") {
+    throw new Error("Enter a valid Tephramesh enrollment cancellation.");
+  }
+  const cancellation = value as DeviceEnrollmentCancellation;
+  validateEnrollmentRequest(cancellation.request);
+  if (!cancellation.rootKeyId || !Array.isArray(cancellation.enrollments) ||
+      !cancellation.cancelledByKeyId || !cancellation.cancelledAt || !cancellation.signature) {
+    throw new Error("The Tephramesh enrollment cancellation is invalid.");
+  }
+  return cancellation;
+}
+
+export async function verifyEnrollmentCancellation(
+  cancellation: DeviceEnrollmentCancellation,
+  pending: LocalDeviceSigningRecord,
+): Promise<void> {
+  if (!pending.pendingRequest ||
+      canonicalJson(pending.pendingRequest) !== canonicalJson(cancellation.request) ||
+      cancellation.request.keyId !== pending.keyId ||
+      cancellation.request.publicKey !== pending.publicKey) {
+    throw new Error("This cancellation does not match this installation's request.");
+  }
+  await verifyEnrollmentChain(cancellation.enrollments, cancellation.rootKeyId);
+  const signer = cancellation.enrollments.find(
+    (candidate) => candidate.keyId === cancellation.cancelledByKeyId,
+  );
+  if (!signer || !(await verifyValue(
+    enrollmentCancellationPayload(cancellation),
+    cancellation.signature,
+    signer.publicKey,
+  ))) {
+    throw new Error("The enrollment cancellation signature is invalid.");
+  }
 }
 
 export function decodeEnrollmentRequest(code: string): DeviceEnrollmentRequest {

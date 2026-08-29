@@ -50,9 +50,11 @@ import {
   createConfigAcceptanceAcknowledgement,
   createEnrollmentRequest,
   createEnrollmentApproval,
+  createEnrollmentCancellation,
   createGenesisEnrollment,
   createSignedConfigEnvelope,
   decodeEnrollmentApproval,
+  decodeEnrollmentCancellation,
   decodeEnrollmentRequest,
   DEVICE_SIGNING_SECRET_NAME,
   encodeEnrollmentCode,
@@ -61,6 +63,7 @@ import {
   SignedConfigConflictError,
   sha256Canonical,
   verifyEnrollmentApproval,
+  verifyEnrollmentCancellation,
   verifyConfigAcceptanceAcknowledgement,
   verifySignedConfigEnvelope,
   type DeviceEnrollment,
@@ -606,18 +609,16 @@ export default class TephrameshPlugin extends Plugin {
     name: string;
     source: "mesh" | "known";
   }> {
-    const local = this.getLocalSigningRecord();
     return this.getAllSigningInstallationOptions().filter((installation) => {
       const enrolled = this.signingEnrollments.some(
         (enrollment) =>
           enrollment.bindingId === installation.bindingId ||
           enrollment.deviceId === installation.deviceId,
       );
-      // If the local Keychain record was lost, the signed enrollment is the
-      // only remaining way to identify this installation's binding. Allow a
-      // replacement request to be generated for an enrolled binding; another
-      // enrolled installation must still approve the new key.
-      return !enrolled || !local;
+      // An authenticated installation is not a candidate for a new local
+      // enrollment request. This also prevents a missing local Keychain
+      // record from making every already-enrolled device selectable.
+      return !enrolled;
     });
   }
 
@@ -840,6 +841,26 @@ export default class TephrameshPlugin extends Plugin {
     return encodeEnrollmentCode(approval);
   }
 
+  async cancelEnrollmentCode(code: string): Promise<string> {
+    if (this.signingTrust !== "enrolled" || !this.signingRootKeyId) {
+      throw new Error("Only an enrolled installation can cancel another device's request.");
+    }
+    const local = this.getLocalSigningRecord();
+    if (!local?.rootKeyId) throw new Error("The local signing key is unavailable.");
+    const request = decodeEnrollmentRequest(code);
+    const installation = this.requireConfiguredSigningInstallation(request.bindingId);
+    if (installation.deviceId !== request.deviceId) {
+      throw new Error("The enrollment request does not match that configured device.");
+    }
+    const cancellation = await createEnrollmentCancellation(
+      this.signingRootKeyId,
+      request,
+      structuredClone(this.signingEnrollments),
+      local,
+    );
+    return encodeEnrollmentCode(cancellation);
+  }
+
   reviewEnrollmentCode(code: string): {
     bindingId: string;
     deviceId: string;
@@ -894,6 +915,26 @@ export default class TephrameshPlugin extends Plugin {
     this.setLocalSigningRecord(enrolled);
     this.signingTrust = "enrolled";
     await this.saveSettings();
+  }
+
+  async applyEnrollmentCancellation(code: string): Promise<void> {
+    if (this.signingTrust !== "approval-required" || !this.signingRootKeyId) {
+      throw new Error("This installation is not waiting for enrollment approval.");
+    }
+    const local = this.getLocalSigningRecord();
+    if (!local?.pendingRequest) {
+      throw new Error("This installation has no pending enrollment request.");
+    }
+    const cancellation = decodeEnrollmentCancellation(code);
+    if (cancellation.rootKeyId !== this.signingRootKeyId) {
+      throw new Error("The cancellation belongs to a different signing environment.");
+    }
+    await verifyEnrollmentCancellation(cancellation, local);
+    this.setLocalSigningRecord({
+      ...local,
+      pendingRequest: undefined,
+      pendingApproval: undefined,
+    });
   }
 
   async restoreConfigVersion(version: number): Promise<void> {

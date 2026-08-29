@@ -15,14 +15,17 @@ import {
   createConfigAcceptanceAcknowledgement,
   createEnrollmentRequest,
   createEnrollmentApproval,
+  createEnrollmentCancellation,
   createGenesisEnrollment,
   createSignedConfigEnvelope,
   decodeEnrollmentApproval,
+  decodeEnrollmentCancellation,
   decodeEnrollmentRequest,
   encodeEnrollmentCode,
   generateSigningKeyPair,
   sha256Canonical,
   verifyEnrollmentApproval,
+  verifyEnrollmentCancellation,
   verifyEnrollmentChain,
   verifyConfigAcceptanceAcknowledgement,
   verifySignedConfigEnvelope,
@@ -187,6 +190,36 @@ describe("configuration signing", () => {
 
     decoded.request.nonce = "different";
     await expect(verifyEnrollmentApproval(decoded, pending)).rejects.toThrow(/match/i);
+  });
+
+  it("requires an enrolled signature to cancel the exact pending request", async () => {
+    const { enrollment: rootEnrollment, local: rootLocal } = await genesis();
+    const joiningKeys = await generateSigningKeyPair();
+    const request = createEnrollmentRequest("instance-b", "device-b", joiningKeys);
+    const pending: LocalDeviceSigningRecord = {
+      format: "tephramesh-local-device-signing-v1",
+      bindingId: request.bindingId,
+      deviceId: request.deviceId,
+      pendingRequest: request,
+      ...joiningKeys,
+    };
+    const cancellation = await createEnrollmentCancellation(
+      rootLocal.keyId,
+      request,
+      [rootEnrollment],
+      rootLocal,
+    );
+    const decoded = decodeEnrollmentCancellation(encodeEnrollmentCode(cancellation));
+    await expect(verifyEnrollmentCancellation(decoded, pending)).resolves.toBeUndefined();
+
+    const differentRequest = createEnrollmentRequest("instance-b", "device-b", joiningKeys);
+    await expect(verifyEnrollmentCancellation(decoded, {
+      ...pending,
+      pendingRequest: differentRequest,
+    })).rejects.toThrow(/match/i);
+
+    decoded.cancelledAt = new Date(0).toISOString();
+    await expect(verifyEnrollmentCancellation(decoded, pending)).rejects.toThrow(/signature/i);
   });
 
   it("lets an approved Known-device installation sign the next configuration", async () => {
