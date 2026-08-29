@@ -884,7 +884,15 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       awaitingSetting.nameEl.appendText(` ${installation.name}`);
     }
-    for (const installation of status.authenticatedInstallations) {
+    const orderedInstallations = [...status.authenticatedInstallations].sort((a, b) => {
+      const aOrder = this.plugin.settings.instances.find((instance) => instance.deviceId === a.deviceId)?.displayOrder;
+      const bOrder = this.plugin.settings.instances.find((instance) => instance.deviceId === b.deviceId)?.displayOrder;
+      if (aOrder === undefined && bOrder === undefined) return 0;
+      if (aOrder === undefined) return 1;
+      if (bOrder === undefined) return -1;
+      return aOrder - bOrder;
+    });
+    orderedInstallations.forEach((installation, installationIndex) => {
       const role = installation.source === "mesh"
         ? "Device"
         : installation.source === "known"
@@ -910,6 +918,38 @@ export class TephrameshSettingTab extends PluginSettingTab {
         authenticatedSetting.settingEl.addClass("is-local");
       }
       authenticatedSetting.nameEl.empty();
+      const dragHandle = document.createElement("span");
+      dragHandle.className = "tephramesh-instance-drag-handle";
+      dragHandle.setAttribute("role", "button");
+      dragHandle.setAttribute("tabindex", "0");
+      dragHandle.setAttribute("aria-label", `Drag to reorder ${installation.name}`);
+      dragHandle.setAttribute("draggable", "true");
+      setIcon(dragHandle, "grip-vertical");
+      authenticatedSetting.settingEl.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        authenticatedSetting.settingEl.addClass("is-drag-over");
+      });
+      authenticatedSetting.settingEl.addEventListener("dragleave", () => authenticatedSetting.settingEl.removeClass("is-drag-over"));
+      authenticatedSetting.settingEl.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        authenticatedSetting.settingEl.removeClass("is-drag-over");
+        const sourceId = event.dataTransfer?.getData("text/plain");
+        const source = this.plugin.settings.instances.find((instance) => instance.deviceId === sourceId && instance.kind === "device");
+        const target = this.plugin.settings.instances.find((instance) => instance.deviceId === installation.deviceId && instance.kind === "device");
+        if (!source || !target || sourceId === installation.deviceId) return;
+        await this.plugin.setInstanceDisplayOrder(source.id, installationIndex);
+        this.display();
+      });
+      dragHandle.addEventListener("dragstart", (event) => {
+        event.dataTransfer?.setData("text/plain", installation.deviceId);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        authenticatedSetting.settingEl.addClass("is-dragging");
+      });
+      dragHandle.addEventListener("dragend", () => {
+        authenticatedSetting.settingEl.removeClass("is-dragging");
+        authenticatedList.querySelectorAll(".is-drag-over").forEach((element) => element.removeClass("is-drag-over"));
+      });
+      authenticatedSetting.nameEl.prepend(dragHandle);
       authenticatedSetting.nameEl.createSpan({
         text: role,
         cls: `tephramesh-authenticated-role is-${installation.source}`,
@@ -933,7 +973,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
           cls: "tephramesh-authenticated-marker is-waiting",
         });
       }
-    }
+    });
     new Setting(container)
       .setName("Approve another installation")
       .setDesc("Paste the request generated on the other installation. Review its device and key before approving it.")
