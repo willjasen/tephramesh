@@ -9,6 +9,7 @@ import {
   isSyncthingSyncState,
   knownDeviceRuntimeState,
   meshPeerPolicy,
+  meshStatusBarPresentation,
   meshRuntimeState,
   meshRuntimeStates,
   topologyHealthState,
@@ -125,6 +126,53 @@ describe("Instances tab indicator", () => {
       ["phone", runtime("idle")],
     ]);
     expect(instancesIndicatorState(instances, statuses, 5)).toBe("warning");
+  });
+});
+
+describe("Obsidian status bar indicator", () => {
+  const runtime = (state: string, ok = true): InstanceRuntimeStatus => ({
+    checkedAt: Date.now(),
+    ok,
+    error: ok ? undefined : "Connection refused",
+    folder: {
+      state,
+      localFiles: 0,
+      globalFiles: 0,
+      needFiles: 0,
+      needBytes: 0,
+    },
+  });
+
+  it("shows a green-ready presentation only when every instance is idle", () => {
+    const statuses = new Map(instances.map((instance) => [instance.id, runtime("idle")]));
+    expect(meshStatusBarPresentation(instances, statuses, 5)).toEqual({
+      state: "ready",
+      label: "Tephramesh: up to date — 3 instances connected",
+    });
+  });
+
+  it("shows scanning and syncing activity", () => {
+    const statuses = new Map(instances.map((instance) => [instance.id, runtime("idle")]));
+    statuses.set("phone", runtime("syncing"));
+    expect(meshStatusBarPresentation(instances, statuses, 5).state).toBe("syncing");
+    statuses.set("shard", runtime("scanning"));
+    expect(meshStatusBarPresentation(instances, statuses, 5).state).toBe("scanning");
+  });
+
+  it("gives connection errors priority and names the unavailable instances", () => {
+    const statuses = new Map(instances.map((instance) => [instance.id, runtime("idle")]));
+    statuses.set("phone", runtime("idle", false));
+    expect(meshStatusBarPresentation(instances, statuses, 5)).toEqual({
+      state: "error",
+      label: "Tephramesh: connection error — Phone",
+    });
+  });
+
+  it("stays in a warning state until every instance has been checked", () => {
+    expect(meshStatusBarPresentation(instances, new Map(), 5)).toEqual({
+      state: "warning",
+      label: "Tephramesh: waiting — Laptop, Phone, Shard",
+    });
   });
 });
 

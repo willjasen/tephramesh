@@ -12,6 +12,7 @@ import {
   canRemoveInstance,
   createMeshPlan,
   isRuntimeStatusFresh,
+  meshStatusBarPresentation,
   meshPeerPolicy,
 } from "./topology";
 import {
@@ -133,6 +134,8 @@ export default class TephrameshPlugin extends Plugin {
   private pendingNoteScans = new Set<string>();
   private noteScanQueueInProgress = false;
   private settingTab!: TephrameshSettingTab;
+  private statusBarItem?: HTMLElement;
+  private statusBarTimer?: number;
   private pollingTimer?: number;
   private statusPollingEnabled = false;
   private noteSyncTimer?: number;
@@ -164,6 +167,19 @@ export default class TephrameshPlugin extends Plugin {
     await this.tryUnlockStoredIdentity();
     this.settingTab = new TephrameshSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
+    this.statusBarItem = this.addStatusBarItem();
+    this.statusBarItem.addClass("tephramesh-status-bar");
+    this.statusBarItem.setAttribute("role", "button");
+    this.statusBarItem.setAttribute("tabindex", "0");
+    this.registerDomEvent(this.statusBarItem, "click", () => {
+      this.openTephrameshSettings();
+    });
+    this.registerDomEvent(this.statusBarItem, "keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      this.openTephrameshSettings();
+    });
+    this.updateStatusBar();
     this.addCommand({
       id: "refresh-syncthing-status",
       name: "Refresh Syncthing status",
@@ -188,6 +204,7 @@ export default class TephrameshPlugin extends Plugin {
       }));
     });
     this.restartNoteSyncPolling();
+    this.restartStatusBarPolling();
     void this.refreshReconciliation();
   }
 
@@ -195,6 +212,7 @@ export default class TephrameshPlugin extends Plugin {
     this.secrets = undefined;
     if (this.pollingTimer !== undefined) window.clearInterval(this.pollingTimer);
     if (this.noteSyncTimer !== undefined) window.clearInterval(this.noteSyncTimer);
+    if (this.statusBarTimer !== undefined) window.clearInterval(this.statusBarTimer);
     this.fileExplorerObserver?.disconnect();
     this.clearNoteSyncBadges();
     if (this.folderLabelSyncTimer !== undefined) {
@@ -214,8 +232,10 @@ export default class TephrameshPlugin extends Plugin {
     await this.tryUnlockStoredIdentity();
     this.restartPolling();
     this.restartNoteSyncPolling();
+    this.restartStatusBarPolling();
     this.settingTab.rerenderIfVisible();
-    if (this.statusPollingEnabled) void this.refreshStatuses(true);
+    this.updateStatusBar();
+    void this.refreshStatuses(true);
     void this.refreshReconciliation(true);
   }
 
@@ -278,6 +298,7 @@ export default class TephrameshPlugin extends Plugin {
       await this.saveSettingsUnsafe();
     } finally {
       release();
+      this.updateStatusBar();
     }
   }
 
@@ -521,6 +542,8 @@ export default class TephrameshPlugin extends Plugin {
     }
     this.restartPolling();
     this.restartNoteSyncPolling();
+    this.restartStatusBarPolling();
+    this.updateStatusBar();
   }
 
   async getConfigFileSize(): Promise<number | undefined> {
@@ -608,6 +631,7 @@ export default class TephrameshPlugin extends Plugin {
       approvedByName?: string;
       isEnrollmentRoot: boolean;
       acceptedCurrentConfig: boolean;
+      hasSeenLocalAcceptance: boolean;
     }>;
   } {
     const local = this.getLocalSigningRecord();
@@ -675,6 +699,7 @@ export default class TephrameshPlugin extends Plugin {
           approvedByName: approverInstallation?.name,
           isEnrollmentRoot: enrollment.keyId === this.signingRootKeyId,
           acceptedCurrentConfig: this.acceptedConfigKeyIds.has(enrollment.keyId),
+          hasSeenLocalAcceptance: this.localAcceptanceObserverKeyIds.has(enrollment.keyId),
         };
       }),
     };
@@ -1131,7 +1156,9 @@ export default class TephrameshPlugin extends Plugin {
     this.reconciliationReport = { state: "checking", issues: [], repairBlockedReasons: [] };
     this.restartPolling();
     this.restartNoteSyncPolling();
-    if (this.statusPollingEnabled) void this.refreshStatuses(true);
+    this.restartStatusBarPolling();
+    this.updateStatusBar();
+    void this.refreshStatuses(true);
     void this.refreshReconciliation(true);
   }
 
@@ -1178,7 +1205,8 @@ export default class TephrameshPlugin extends Plugin {
     const keys = await validateAgeKeyPair(this.settings.ageRecipient, identity);
     await this.decryptStoredData(keys.identity);
     this.app.secretStorage.setSecret(AGE_IDENTITY_SECRET_NAME, keys.identity);
-    if (this.statusPollingEnabled) void this.refreshStatuses(true);
+    this.updateStatusBar();
+    void this.refreshStatuses(true);
   }
 
   getSignedConfigConflict(): { revision: number; envelopeHash: string } | undefined {
@@ -2071,6 +2099,83 @@ export default class TephrameshPlugin extends Plugin {
     void this.refreshNoteSyncBadges();
   }
 
+  restartStatusBarPolling(): void {
+    if (this.statusBarTimer !== undefined) window.clearInterval(this.statusBarTimer);
+    const milliseconds = Math.max(
+      5_000,
+      noteSyncPollIntervalMilliseconds(this.settings.noteSyncPollIntervalSeconds),
+    );
+    this.statusBarTimer = window.setInterval(() => {
+      if (!this.statusPollingEnabled) void this.refreshStatuses();
+    }, milliseconds);
+    if (!this.statusPollingEnabled) void this.refreshStatuses(true);
+  }
+
+  private updateStatusBar(): void {
+    const item = this.statusBarItem;
+    if (!item) return;
+    item.empty();
+    item.removeClass(
+      "is-ready",
+      "is-scanning",
+      "is-syncing",
+      "is-warning",
+      "is-error",
+    );
+
+    if (!this.settings.onboardingComplete) {
+      item.addClass("is-warning");
+      setIcon(item, "settings");
+      this.setStatusBarLabel(item, "Tephramesh: setup required");
+      return;
+    }
+    if (!this.secretsAreUnlocked()) {
+      item.addClass("is-warning");
+      setIcon(item, "lock");
+      this.setStatusBarLabel(item, "Tephramesh: unlock required");
+      return;
+    }
+    if (this.signingTrust === "approval-required") {
+      item.addClass("is-warning");
+      setIcon(item, "alert-triangle");
+      this.setStatusBarLabel(item, "Tephramesh: installation approval required");
+      return;
+    }
+
+    const presentation = meshStatusBarPresentation(
+      this.settings.instances,
+      this.runtimeStatuses,
+      this.settings.offlineTimeoutSeconds,
+    );
+    const icons = {
+      ready: "check-circle",
+      scanning: "search",
+      syncing: "refresh-cw",
+      warning: "alert-triangle",
+      error: "alert-circle",
+    } as const;
+    item.addClass(`is-${presentation.state}`);
+    setIcon(item, icons[presentation.state]);
+    this.setStatusBarLabel(item, presentation.label);
+  }
+
+  private setStatusBarLabel(item: HTMLElement, label: string): void {
+    const interactiveLabel = `${label}. Open Tephramesh settings.`;
+    item.setAttribute("aria-label", interactiveLabel);
+    item.setAttribute("title", interactiveLabel);
+  }
+
+  private openTephrameshSettings(): void {
+    const settings = (this.app as typeof this.app & {
+      setting: {
+        open(): void;
+        openTabById(id: string): void;
+      };
+    }).setting;
+    settings.open();
+    settings.openTabById(this.manifest.id);
+  }
+
   private async refreshNoteSyncBadges(): Promise<void> {
     if (this.noteSyncRefreshInProgress) return;
     if (
@@ -2500,6 +2605,7 @@ export default class TephrameshPlugin extends Plugin {
         this.settingTab.rerenderIfVisible();
       }
       this.settingTab.refreshRuntimeStatuses(this.runtimeStatuses);
+      this.updateStatusBar();
       const availabilityAfter = activeMeshInstances(this.settings.instances)
         .map((instance) => `${instance.id}:${isRuntimeStatusFresh(
           this.runtimeStatuses.get(instance.id),
@@ -2634,6 +2740,7 @@ export default class TephrameshPlugin extends Plugin {
         this.settingTab.rerenderIfVisible();
       }
       this.settingTab.refreshRuntimeStatuses(this.runtimeStatuses);
+      this.updateStatusBar();
     }
     return nameChanged;
   }

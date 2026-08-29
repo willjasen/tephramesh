@@ -473,6 +473,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
             this.plugin.settings.noteSyncPollIntervalSeconds = Number(value);
             await this.plugin.saveSettings();
             this.plugin.restartNoteSyncPolling();
+            this.plugin.restartStatusBarPolling();
           }),
       );
     const hostCount = activeMeshInstances(this.plugin.settings.instances).length;
@@ -943,7 +944,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const authenticatedSetting = new Setting(authenticatedList)
         .setName(installation.name)
         .setDesc(
-          `Device ${shortDeviceId(installation.deviceId)} · Key ${installation.keyId.slice(0, 12)} · ${approvedBy} · ${authenticatedLabel} · ${installation.acceptedCurrentConfig ? "Accepted current config" : "Waiting for acknowledgement"}`,
+          `Device ${shortDeviceId(installation.deviceId)} · Key ${installation.keyId.slice(0, 12)} · ${approvedBy} · ${authenticatedLabel} · ${installation.acceptedCurrentConfig ? "Accepted current config" : "Waiting for acknowledgement"} · ${installation.hasSeenLocalAcceptance ? "Saw this installation's acceptance" : "Waiting to see this installation's acceptance"}`,
         );
       authenticatedSetting.settingEl.addClass(
         "tephramesh-authenticated-installation",
@@ -1005,6 +1006,12 @@ export class TephrameshSettingTab extends PluginSettingTab {
       if (!installation.acceptedCurrentConfig) {
         authenticatedSetting.nameEl.createSpan({
           text: "Waiting",
+          cls: "tephramesh-authenticated-marker is-waiting",
+        });
+      }
+      if (!installation.hasSeenLocalAcceptance) {
+        authenticatedSetting.nameEl.createSpan({
+          text: "Propagation pending",
           cls: "tephramesh-authenticated-marker is-waiting",
         });
       }

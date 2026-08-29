@@ -9,6 +9,61 @@ import type {
 export type MeshRuntimeState = "idle" | "scanning" | "syncing" | "checking" | "unavailable" | "pending";
 export type KnownDeviceRuntimeState = "online" | "offline" | "unavailable";
 export type InstanceIndicatorState = "online" | "warning" | "scanning" | "syncing" | "unavailable";
+export type MeshStatusBarState = "ready" | "scanning" | "syncing" | "warning" | "error";
+
+export interface MeshStatusBarPresentation {
+  state: MeshStatusBarState;
+  label: string;
+}
+
+export function meshStatusBarPresentation(
+  instances: MeshInstance[],
+  statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
+  timeoutSeconds: number,
+): MeshStatusBarPresentation {
+  if (instances.length === 0) {
+    return { state: "warning", label: "Tephramesh: setup required" };
+  }
+
+  const unavailable = instances.filter((instance) => {
+    const status = statuses.get(instance.id);
+    return Boolean(status && !isRuntimeStatusFresh(status, timeoutSeconds));
+  });
+  if (unavailable.length > 0) {
+    return {
+      state: "error",
+      label: `Tephramesh: connection ${unavailable.length === 1 ? "error" : "errors"} — ${unavailable.map((instance) => instance.name).join(", ")}`,
+    };
+  }
+
+  const unchecked = instances.filter((instance) => !statuses.has(instance.id));
+  const pending = instances.filter((instance) => instance.setupState === "pending");
+  const paused = instances.filter((instance) => statuses.get(instance.id)?.folderPaused);
+  const incomplete = [...new Map(
+    [...unchecked, ...pending, ...paused].map((instance) => [instance.id, instance]),
+  ).values()];
+  if (incomplete.length > 0) {
+    return {
+      state: "warning",
+      label: `Tephramesh: waiting — ${incomplete.map((instance) => instance.name).join(", ")}`,
+    };
+  }
+
+  const freshStatuses = instances.map((instance) => statuses.get(instance.id));
+  if (freshStatuses.some((status) => status?.folder?.state === "scanning")) {
+    return { state: "scanning", label: "Tephramesh: scanning vault" };
+  }
+  if (freshStatuses.some((status) => isSyncthingSyncState(status?.folder?.state))) {
+    return { state: "syncing", label: "Tephramesh: syncing vault" };
+  }
+  if (freshStatuses.every((status) => status?.folder?.state === "idle")) {
+    return {
+      state: "ready",
+      label: `Tephramesh: up to date — ${instances.length} ${instances.length === 1 ? "instance" : "instances"} connected`,
+    };
+  }
+  return { state: "warning", label: "Tephramesh: checking mesh status" };
+}
 
 export function instanceIndicatorState(
   instance: MeshInstance,
