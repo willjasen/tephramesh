@@ -504,7 +504,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
         for (const block of history) {
           const savedAt = new Date(block.savedAt);
           const dateLabel = Number.isNaN(savedAt.getTime()) ? block.savedAt : savedAt.toLocaleString();
-          dropdown.addOption(String(block.version), `Version ${block.version}${block.version === currentVersion ? " · Current" : ""} · ${dateLabel}`);
+          dropdown.addOption(String(block.version), `✅ Version ${block.version}${block.version === currentVersion ? " · Current" : ""} · ${dateLabel}`);
         }
         dropdown.setValue(String(selectedBlock.version)).onChange((value) => {
           this.selectedConfigVersion = Number(value);
