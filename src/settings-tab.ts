@@ -242,7 +242,16 @@ export class TephrameshSettingTab extends PluginSettingTab {
               this.plugin.settings.folderLabel =
                 result.discoveredFolder?.label || "Obsidian vault";
               this.plugin.settings.onboardingComplete = true;
-              await this.plugin.initializeSigningEnvironment(`mesh:${result.instance.id}`);
+              // A restored pre-onboarding snapshot can be running inside an
+              // already-signed configuration. In that case the signing root
+              // and this installation's enrollment were loaded from the
+              // signed envelope, so creating a second genesis enrollment
+              // would fail after Syncthing has already been changed.
+              if (this.plugin.getSigningEnvironmentStatus().rootKeyId) {
+                await this.plugin.saveSettings();
+              } else {
+                await this.plugin.initializeSigningEnvironment(`mesh:${result.instance.id}`);
+              }
               this.plugin.setKnownHealthy(result.instance.id, result.version, result.operatingSystem);
               this.display();
               await this.plugin.refreshStatuses();
