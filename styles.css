@@ -338,6 +338,10 @@ button.tephramesh-pending-button {
   color: var(--text-warning);
 }
 
+.tephramesh-status.is-warning {
+  color: var(--text-warning);
+}
+
 button.tephramesh-approve-button,
 button.tephramesh-approve-button:hover {
   background-color: var(--color-yellow);

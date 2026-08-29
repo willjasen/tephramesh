@@ -1716,9 +1716,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
     status: InstanceRuntimeStatus | undefined,
   ): void {
     element.empty();
-    element.removeClass("is-error", "is-scanning", "is-syncing", "is-paused");
+    element.removeClass("is-error", "is-warning", "is-scanning", "is-syncing", "is-paused");
     if (!status) {
       element.setText("Not checked yet");
+      element.addClass("is-warning");
       return;
     }
     if (!isRuntimeStatusFresh(status, this.plugin.settings.offlineTimeoutSeconds)) {
