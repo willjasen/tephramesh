@@ -464,6 +464,20 @@ export default class TephrameshPlugin extends Plugin {
     return this.secrets?.shardEncryptionKey || null;
   }
 
+  getKnownStatusQueryContext(): {
+    preferredInstanceId?: string;
+    localKnownDeviceId?: string;
+  } {
+    const bindingId = this.getLocalSigningRecord()?.bindingId;
+    if (bindingId?.startsWith("mesh:")) {
+      return { preferredInstanceId: bindingId.slice("mesh:".length) };
+    }
+    if (bindingId?.startsWith("known:")) {
+      return { localKnownDeviceId: bindingId.slice("known:".length) };
+    }
+    return {};
+  }
+
   getDecryptedConfig(): TephrameshProtectedData | null {
     if (!this.secrets) return null;
     const {
@@ -2171,8 +2185,14 @@ export default class TephrameshPlugin extends Plugin {
       if (checkMetadata) {
         this.nextInstanceMetadataRefreshAt = now + TephrameshPlugin.INSTANCE_METADATA_REFRESH_INTERVAL_MS;
       }
+      const { preferredInstanceId } = this.getKnownStatusQueryContext();
+      const instancesInQueryOrder = preferredInstanceId
+        ? [...this.settings.instances].sort((left, right) =>
+            Number(right.id === preferredInstanceId) - Number(left.id === preferredInstanceId),
+          )
+        : this.settings.instances;
       const nameChanges = await Promise.all(
-        this.settings.instances.map(async (instance) => {
+        instancesInQueryOrder.map(async (instance) => {
           const timeoutMs = Math.max(1, this.settings.offlineTimeoutSeconds) * 1000;
           let timer: number | undefined;
           try {
@@ -2316,6 +2336,14 @@ export default class TephrameshPlugin extends Plugin {
         traffic,
       );
       const previous = this.runtimeStatuses.get(instance.id);
+      const peerConnections = instance.kind === "device"
+        ? Object.fromEntries(
+            Object.entries(connections.connections ?? {}).map(([deviceId, connection]) => [
+              deviceId,
+              connection.connected === true,
+            ]),
+          )
+        : undefined;
       this.runtimeStatuses.set(instance.id, {
         checkedAt,
         ok: true,
@@ -2326,6 +2354,7 @@ export default class TephrameshPlugin extends Plugin {
         folderPaused: folderConfig ? Boolean(folderConfig.paused) : previous?.folderPaused,
         pendingFiles,
         traffic,
+        peerConnections,
         ...rates,
       });
     } catch (error) {

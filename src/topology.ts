@@ -7,6 +7,61 @@ import type {
 } from "./model";
 
 export type MeshRuntimeState = "idle" | "scanning" | "syncing" | "checking" | "unavailable" | "pending";
+export type KnownDeviceRuntimeState = "online" | "offline" | "unavailable";
+export type InstanceIndicatorState = "online" | "warning" | "scanning" | "syncing" | "unavailable";
+
+export function instanceIndicatorState(
+  instance: MeshInstance,
+  status: InstanceRuntimeStatus | undefined,
+  timeoutSeconds: number,
+): InstanceIndicatorState {
+  if (instance.setupState === "pending" || status?.folderPaused) return "warning";
+  if (status && !isRuntimeStatusFresh(status, timeoutSeconds)) return "unavailable";
+  if (status?.folder?.state === "scanning") return "scanning";
+  if (isSyncthingSyncState(status?.folder?.state)) return "syncing";
+  return "online";
+}
+
+export function instancesIndicatorState(
+  instances: MeshInstance[],
+  statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
+  timeoutSeconds: number,
+): InstanceIndicatorState {
+  const states = instances.map((instance) =>
+    instanceIndicatorState(instance, statuses.get(instance.id), timeoutSeconds),
+  );
+  if (states.includes("unavailable")) return "unavailable";
+  if (states.includes("warning")) return "warning";
+  if (states.includes("scanning")) return "scanning";
+  if (states.includes("syncing")) return "syncing";
+  return "online";
+}
+
+export function knownDeviceRuntimeState(
+  deviceId: string,
+  instances: MeshInstance[],
+  statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
+  timeoutSeconds: number,
+  preferredInstanceId?: string,
+  excludedDeviceId?: string,
+): KnownDeviceRuntimeState {
+  const onlineDeviceStatuses = activeMeshInstances(instances)
+    .filter((instance) => instance.kind === "device" && instance.deviceId !== excludedDeviceId)
+    .flatMap((instance) => {
+      const status = statuses.get(instance.id);
+      return isRuntimeStatusFresh(status, timeoutSeconds)
+        ? [{ instanceId: instance.id, status: status! }]
+        : [];
+    });
+  if (onlineDeviceStatuses.length === 0) return "unavailable";
+  const preferred = onlineDeviceStatuses.find(({ instanceId }) => instanceId === preferredInstanceId);
+  if (preferred) {
+    return preferred.status.peerConnections?.[deviceId] === true ? "online" : "offline";
+  }
+  return onlineDeviceStatuses.some(({ status }) => status.peerConnections?.[deviceId] === true)
+    ? "online"
+    : "offline";
+}
 
 export function activeMeshInstances(instances: MeshInstance[]): MeshInstance[] {
   return instances.filter((instance) => instance.setupState !== "pending");

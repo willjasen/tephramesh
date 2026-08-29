@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { MeshInstance } from "../src/model";
+import type { InstanceRuntimeStatus, MeshInstance } from "../src/model";
 import {
   activeMeshInstances,
   canRemoveInstance,
   createMeshPlan,
+  instanceIndicatorState,
+  instancesIndicatorState,
   isSyncthingSyncState,
+  knownDeviceRuntimeState,
   meshPeerPolicy,
   meshRuntimeState,
   meshRuntimeStates,
@@ -13,6 +16,108 @@ import {
   unavailableStatusIsTolerated,
   unavailableInstancesSummary,
 } from "../src/topology";
+
+describe("knownDeviceRuntimeState", () => {
+  const status = (peerConnections?: Record<string, boolean>): InstanceRuntimeStatus => ({
+    checkedAt: Date.now(),
+    ok: true,
+    peerConnections,
+  });
+
+  it("is online when any fresh active Device reports a connection", () => {
+    const statuses = new Map([
+      ["laptop", status({ "KNOWN-ID": false })],
+      ["phone", status({ "KNOWN-ID": true })],
+    ]);
+    expect(knownDeviceRuntimeState("KNOWN-ID", instances, statuses, 5)).toBe("online");
+  });
+
+  it("is offline when fresh Devices report no connection", () => {
+    expect(knownDeviceRuntimeState(
+      "KNOWN-ID",
+      instances,
+      new Map([["laptop", status({ "KNOWN-ID": false })]]),
+      5,
+    )).toBe("offline");
+  });
+
+  it("is unavailable when no Device has a fresh status", () => {
+    expect(knownDeviceRuntimeState("KNOWN-ID", instances, new Map(), 5)).toBe("unavailable");
+  });
+
+  it("prefers the local Device's report over another online Device", () => {
+    const statuses = new Map([
+      ["laptop", status({ "KNOWN-ID": false })],
+      ["phone", status({ "KNOWN-ID": true })],
+    ]);
+    expect(knownDeviceRuntimeState(
+      "KNOWN-ID",
+      instances,
+      statuses,
+      5,
+      "laptop",
+    )).toBe("offline");
+  });
+
+  it("does not use the local Known peer as a query source", () => {
+    const duplicateKnownSource: MeshInstance = {
+      ...instances[0]!,
+      id: "known-local-api",
+      deviceId: "KNOWN-ID",
+    };
+    const statuses = new Map([
+      ["known-local-api", status({ "KNOWN-ID": true })],
+      ["phone", status({ "KNOWN-ID": false })],
+    ]);
+    expect(knownDeviceRuntimeState(
+      "KNOWN-ID",
+      [duplicateKnownSource, instances[1]!],
+      statuses,
+      5,
+      undefined,
+      "KNOWN-ID",
+    )).toBe("offline");
+  });
+});
+
+describe("Instances tab indicator", () => {
+  const runtime = (
+    state: string,
+    options: { ok?: boolean; paused?: boolean } = {},
+  ): InstanceRuntimeStatus => ({
+    checkedAt: Date.now(),
+    ok: options.ok ?? true,
+    folderPaused: options.paused,
+    folder: {
+      state,
+      localFiles: 0,
+      globalFiles: 0,
+      needFiles: 0,
+      needBytes: 0,
+    },
+  });
+
+  it("matches each instance row's status state", () => {
+    expect(instanceIndicatorState(instances[0]!, runtime("idle"), 5)).toBe("online");
+    expect(instanceIndicatorState(instances[0]!, runtime("scanning"), 5)).toBe("scanning");
+    expect(instanceIndicatorState(instances[0]!, runtime("sync-waiting"), 5)).toBe("syncing");
+    expect(instanceIndicatorState(instances[0]!, runtime("idle", { paused: true }), 5)).toBe("warning");
+    expect(instanceIndicatorState(instances[0]!, runtime("idle", { ok: false }), 5)).toBe("unavailable");
+  });
+
+  it("uses red, yellow, blue, then green priority across Devices and Shards", () => {
+    const statuses = new Map<string, InstanceRuntimeStatus>([
+      ["laptop", runtime("idle")],
+      ["phone", runtime("syncing")],
+      ["shard", runtime("idle")],
+    ]);
+    expect(instancesIndicatorState(instances, statuses, 5)).toBe("syncing");
+    statuses.set("shard", runtime("idle", { paused: true }));
+    expect(instancesIndicatorState(instances, statuses, 5)).toBe("warning");
+    statuses.set("laptop", runtime("idle", { ok: false }));
+    expect(instancesIndicatorState(instances, statuses, 5)).toBe("unavailable");
+  });
+});
 
 const endpoint = { protocol: "https" as const, hostname: "example.com", port: 8384 };
 const password = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6";

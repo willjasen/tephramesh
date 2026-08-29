@@ -41,6 +41,15 @@
   background: var(--text-warning);
 }
 
+.tephramesh-tab-indicator.is-unavailable {
+  background: var(--text-error);
+}
+
+.tephramesh-tab-indicator.is-scanning,
+.tephramesh-tab-indicator.is-syncing {
+  background: var(--color-blue, #59c2ff);
+}
+
 .tephramesh-tab-content {
   min-width: 0;
 }
@@ -281,6 +290,33 @@
 
 .tephramesh-known-button {
   margin-left: 0.5em;
+}
+
+.tephramesh-instance-status-indicator {
+  background: var(--text-error);
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 auto;
+  height: 0.65rem;
+  margin: 0 var(--size-4-2);
+  width: 0.65rem;
+}
+
+.tephramesh-instance-status-indicator.is-online {
+  background: var(--text-success);
+}
+
+.tephramesh-instance-status-indicator.is-warning {
+  background: var(--text-warning);
+}
+
+.tephramesh-instance-status-indicator.is-offline {
+  background: var(--text-error);
+}
+
+.tephramesh-instance-status-indicator.is-scanning,
+.tephramesh-instance-status-indicator.is-syncing {
+  background: var(--color-blue, #59c2ff);
 }
 
 .setting-item-description a.tephramesh-instance-url,

@@ -12,6 +12,9 @@ import {
   createMeshPlan,
   isSyncthingSyncState,
   isRuntimeStatusFresh,
+  instanceIndicatorState,
+  instancesIndicatorState,
+  knownDeviceRuntimeState,
   meshRuntimeStates,
   topologyHealthState,
 } from "./topology";
@@ -53,8 +56,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private versionElements = new Map<string, HTMLElement>();
   private operatingSystemElements = new Map<string, HTMLElement>();
   private pauseButtons = new Map<string, ButtonComponent>();
+  private instanceStatusIndicators = new Map<string, HTMLElement>();
+  private knownStatusIndicators = new Map<string, HTMLElement>();
   private topologyElement?: HTMLElement;
   private topologyTabIndicator?: HTMLElement;
+  private instancesTabIndicator?: HTMLElement;
   private reconciliationElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
   private visible = false;
@@ -103,8 +109,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
     this.versionElements.clear();
     this.operatingSystemElements.clear();
     this.pauseButtons.clear();
+    this.instanceStatusIndicators.clear();
+    this.knownStatusIndicators.clear();
     this.topologyElement = undefined;
     this.topologyTabIndicator = undefined;
+    this.instancesTabIndicator = undefined;
     this.reconciliationElement = undefined;
     containerEl.createEl("h1", { text: "Tephramesh" });
 
@@ -236,6 +245,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
     for (const [instanceId, button] of this.pauseButtons) {
       this.updatePauseButton(button, statuses.get(instanceId));
     }
+    for (const [instanceId, indicator] of this.instanceStatusIndicators) {
+      this.updateInstanceStatusIndicator(indicator, instanceId, statuses);
+    }
+    for (const [deviceId, indicator] of this.knownStatusIndicators) {
+      this.updateKnownStatusIndicator(indicator, deviceId, statuses);
+    }
+    this.updateInstancesTabIndicator(statuses);
     this.updateTopology();
   }
 
@@ -306,6 +322,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
         this.topologyTabIndicator = button.createSpan({
           cls: "tephramesh-topology-indicator tephramesh-tab-indicator",
         });
+      } else if (section.id === "instances") {
+        this.instancesTabIndicator = button.createSpan({
+          cls: "tephramesh-topology-indicator tephramesh-tab-indicator",
+        });
+        this.updateInstancesTabIndicator(this.plugin.runtimeStatuses);
       } else if (section.id === "auth") {
         const signingStatus = this.plugin.getSigningEnvironmentStatus();
         const hasPendingInstallation = Boolean(this.pendingApprovedInstallation) ||
@@ -1099,6 +1120,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       setting.nameEl.empty();
       setting.nameEl.prepend(dragHandle);
+      const statusIndicator = setting.nameEl.createSpan({ cls: "tephramesh-instance-status-indicator" });
+      this.instanceStatusIndicators.set(instance.id, statusIndicator);
+      this.updateInstanceStatusIndicator(statusIndicator, instance.id, this.plugin.runtimeStatuses);
       const instanceLink = setting.nameEl.createEl("a", {
         text: ` ${instance.name}`,
         href: endpointUrl(instance.endpoint),
@@ -1255,6 +1279,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const setting = new Setting(knownSection);
       setting.settingEl.addClass("tephramesh-instance-card");
       setting.nameEl.empty();
+      const statusIndicator = setting.nameEl.createSpan({ cls: "tephramesh-instance-status-indicator" });
+      this.knownStatusIndicators.set(known.deviceId, statusIndicator);
+      this.updateKnownStatusIndicator(statusIndicator, known.deviceId, this.plugin.runtimeStatuses);
       setting.nameEl.appendText(` ${known.name}`);
       setting.nameEl.createSpan({ text: ` · ${shortDeviceId(known.deviceId)}`, cls: "tephramesh-instance-heading-meta" });
       this.renderSigningBadge(setting.nameEl, known.deviceId);
@@ -1293,6 +1320,69 @@ export class TephrameshSettingTab extends PluginSettingTab {
         : "This installation has a pending configuration-signing enrollment request.",
     );
     badge.setAttribute("title", badge.getAttribute("aria-label")!);
+  }
+
+  private updateInstanceStatusIndicator(
+    indicator: HTMLElement,
+    instanceId: string,
+    statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
+  ): void {
+    const instance = this.plugin.settings.instances.find((candidate) => candidate.id === instanceId);
+    if (!instance) return;
+    const status = statuses.get(instanceId);
+    const state = instanceIndicatorState(
+      instance,
+      status,
+      this.plugin.settings.offlineTimeoutSeconds,
+    );
+    const label = instance.setupState === "pending"
+      ? "Pending setup"
+      : state === "unavailable"
+        ? "Unavailable"
+        : status?.folderPaused
+          ? "Paused"
+          : status?.folder?.state ?? "Connected";
+    indicator.className = `tephramesh-instance-status-indicator is-${state}`;
+    indicator.setAttribute("aria-label", label);
+    indicator.setAttribute("title", label);
+  }
+
+  private updateInstancesTabIndicator(
+    statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
+  ): void {
+    if (!this.instancesTabIndicator) return;
+    const state = instancesIndicatorState(
+      this.plugin.settings.instances,
+      statuses,
+      this.plugin.settings.offlineTimeoutSeconds,
+    );
+    const label = state === "online" ? "All instances online" : `Instance status: ${state}`;
+    this.instancesTabIndicator.className = `tephramesh-topology-indicator tephramesh-tab-indicator is-${state}`;
+    this.instancesTabIndicator.setAttribute("title", label);
+    this.instancesTabIndicator.parentElement?.setAttribute("aria-label", `Instances. ${label}`);
+  }
+
+  private updateKnownStatusIndicator(
+    indicator: HTMLElement,
+    deviceId: string,
+    statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
+  ): void {
+    const queryContext = this.plugin.getKnownStatusQueryContext();
+    const state = knownDeviceRuntimeState(
+      deviceId,
+      this.plugin.settings.instances,
+      statuses,
+      this.plugin.settings.offlineTimeoutSeconds,
+      queryContext.preferredInstanceId,
+      queryContext.localKnownDeviceId,
+    );
+    const label = state === "online" ? "Online" : state === "offline" ? "Offline" : "Unavailable";
+    const detail = state === "unavailable"
+      ? "No online Device is available to check this Known peer."
+      : `Online Devices report this Known peer ${state}.`;
+    indicator.className = `tephramesh-instance-status-indicator is-${state}`;
+    indicator.setAttribute("aria-label", `${label}. ${detail}`);
+    indicator.setAttribute("title", detail);
   }
 
   private openInstanceModal(kind: InstanceKind): void {

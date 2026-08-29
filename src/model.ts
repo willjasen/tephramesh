@@ -142,6 +142,8 @@ export interface InstanceRuntimeStatus {
   traffic?: SyncthingTrafficSample;
   downloadBytesPerSecond?: number;
   uploadBytesPerSecond?: number;
+  /** Remote connection state keyed by Syncthing device ID. */
+  peerConnections?: Record<string, boolean>;
 }
 
 export function normalizeInstanceDisplayOrder(instances: unknown): MeshInstance[] {
@@ -161,6 +163,7 @@ export interface SyncthingTrafficSample {
 }
 
 export interface SyncthingConnections {
+  connections?: Record<string, { connected?: boolean }>;
   total: {
     inBytesTotal: number;
     outBytesTotal: number;
