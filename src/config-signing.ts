@@ -88,6 +88,17 @@ export interface ConfigAcceptanceAcknowledgement {
   signature: string;
 }
 
+export interface ConfigAcceptanceConfirmation {
+  format: "tephramesh-config-acceptance-confirmation-v1";
+  rootKeyId: string;
+  revision: number;
+  envelopeHash: string;
+  signerKeyId: string;
+  observedSignerKeyIds: string[];
+  observedAt: string;
+  signature: string;
+}
+
 export class SignedConfigConflictError extends Error {
   constructor() {
     super("A conflicting signed Tephramesh configuration was rejected.");
@@ -283,6 +294,72 @@ export async function verifyConfigAcceptanceAcknowledgement(
     throw new Error("The configuration acknowledgement signature is invalid.");
   }
   return candidate as ConfigAcceptanceAcknowledgement;
+}
+
+function configAcceptanceConfirmationPayload(
+  confirmation: ConfigAcceptanceConfirmation,
+): Omit<ConfigAcceptanceConfirmation, "signature"> {
+  const { signature: _signature, ...payload } = confirmation;
+  return payload;
+}
+
+export async function createConfigAcceptanceConfirmation(
+  rootKeyId: string,
+  revision: number,
+  envelopeHash: string,
+  observedSignerKeyIds: string[],
+  signer: LocalDeviceSigningRecord,
+): Promise<ConfigAcceptanceConfirmation> {
+  if (!signer.rootKeyId || signer.rootKeyId !== rootKeyId) {
+    throw new Error("This installation cannot confirm a different signing root.");
+  }
+  await assertSigningKeyPair(signer);
+  const payload = {
+    format: "tephramesh-config-acceptance-confirmation-v1" as const,
+    rootKeyId,
+    revision,
+    envelopeHash,
+    signerKeyId: signer.keyId,
+    observedSignerKeyIds: [...new Set(observedSignerKeyIds)].sort(),
+    observedAt: new Date().toISOString(),
+  };
+  return { ...payload, signature: await signValue(payload, signer.privateKey) };
+}
+
+export async function verifyConfigAcceptanceConfirmation(
+  value: unknown,
+  rootKeyId: string,
+  revision: number,
+  envelopeHash: string,
+  enrollments: DeviceEnrollment[],
+  revokedEnrollmentKeyIds: string[],
+): Promise<ConfigAcceptanceConfirmation> {
+  if (!value || typeof value !== "object") throw new Error("The configuration acceptance confirmation is invalid.");
+  const candidate = value as Partial<ConfigAcceptanceConfirmation>;
+  const activeKeyIds = new Set(enrollments
+    .filter((enrollment) => !revokedEnrollmentKeyIds.includes(enrollment.keyId))
+    .map((enrollment) => enrollment.keyId));
+  if (candidate.format !== "tephramesh-config-acceptance-confirmation-v1" ||
+      candidate.rootKeyId !== rootKeyId || candidate.revision !== revision ||
+      candidate.envelopeHash !== envelopeHash || typeof candidate.signerKeyId !== "string" ||
+      !Array.isArray(candidate.observedSignerKeyIds) ||
+      candidate.observedSignerKeyIds.some((keyId) => typeof keyId !== "string" || !activeKeyIds.has(keyId)) ||
+      new Set(candidate.observedSignerKeyIds).size !== candidate.observedSignerKeyIds.length ||
+      [...candidate.observedSignerKeyIds].sort().some((keyId, index) => keyId !== candidate.observedSignerKeyIds![index]) ||
+      typeof candidate.observedAt !== "string" || !Number.isFinite(Date.parse(candidate.observedAt)) ||
+      typeof candidate.signature !== "string") {
+    throw new Error("The acceptance confirmation does not match the current signed configuration.");
+  }
+  await verifyEnrollmentChain(enrollments, rootKeyId);
+  const signer = enrollments.find((enrollment) => enrollment.keyId === candidate.signerKeyId);
+  if (!signer || !activeKeyIds.has(signer.keyId) || !(await verifyValue(
+    configAcceptanceConfirmationPayload(candidate as ConfigAcceptanceConfirmation),
+    candidate.signature,
+    signer.publicKey,
+  ))) {
+    throw new Error("The acceptance confirmation signature is invalid.");
+  }
+  return candidate as ConfigAcceptanceConfirmation;
 }
 
 function enrollmentPayload(enrollment: DeviceEnrollment): Omit<DeviceEnrollment, "signature"> {

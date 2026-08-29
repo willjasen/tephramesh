@@ -48,6 +48,7 @@ import {
   assertEnrollmentMembershipAccepted,
   assertSignedRevisionAccepted,
   createConfigAcceptanceAcknowledgement,
+  createConfigAcceptanceConfirmation,
   createEnrollmentRequest,
   createEnrollmentApproval,
   createEnrollmentCancellation,
@@ -65,9 +66,9 @@ import {
   verifyEnrollmentApproval,
   verifyEnrollmentCancellation,
   verifyConfigAcceptanceAcknowledgement,
+  verifyConfigAcceptanceConfirmation,
   verifySignedConfigEnvelope,
   type DeviceEnrollment,
-  type ConfigAcceptanceAcknowledgement,
   type LocalDeviceSigningRecord,
 } from "./config-signing";
 import { createConfigJournalRecord, isConfigJournalRecord, type ConfigJournalRecord } from "./config-journal";
@@ -117,6 +118,8 @@ export default class TephrameshPlugin extends Plugin {
   private saveQueue: Promise<void> = Promise.resolve();
   private configJournalRecords: ConfigJournalRecord[] = [];
   private acceptedConfigKeyIds = new Set<string>();
+  private localAcceptanceObserverKeyIds = new Set<string>();
+  private acceptanceConfirmations = new Map<string, Set<string>>();
   private acknowledgementRefreshInProgress = false;
   private lastAcknowledgementRefreshAt = 0;
   private configSubpathScans = new Map<string, Promise<void>>();
@@ -328,6 +331,9 @@ export default class TephrameshPlugin extends Plugin {
       this.signedConfigRevision = nextSignedEnvelope.revision;
       this.signedConfigHash = nextSignedHash;
       this.signingTrust = "enrolled";
+      this.acceptedConfigKeyIds.clear();
+      this.localAcceptanceObserverKeyIds.clear();
+      this.acceptanceConfirmations.clear();
       localSigning = {
         ...localSigning,
         pendingRequest: undefined,
@@ -502,6 +508,7 @@ export default class TephrameshPlugin extends Plugin {
     rootKeyId: string;
     revision: number;
     acceptedCount: number;
+    acceptanceSeenByCount: number;
     enrolledCount: number;
     localInstallationName?: string;
     pendingRequestCode?: string;
@@ -540,6 +547,7 @@ export default class TephrameshPlugin extends Plugin {
       acceptedCount: this.signingEnrollments.filter((enrollment) =>
         this.acceptedConfigKeyIds.has(enrollment.keyId)
       ).length,
+      acceptanceSeenByCount: this.localAcceptanceObserverKeyIds.size,
       enrolledCount: this.signingEnrollments.length,
       localInstallationName: local
         ? this.getAllSigningInstallationOptions().find(
@@ -684,6 +692,10 @@ export default class TephrameshPlugin extends Plugin {
     );
   }
 
+  private currentConfigConfirmationDirectory(): string {
+    return normalizePath(`${this.currentConfigAcknowledgementDirectory()}/confirmations`);
+  }
+
   private async writeCurrentConfigAcknowledgement(local: LocalDeviceSigningRecord): Promise<void> {
     if (!this.signingRootKeyId || !this.signedConfigRevision || !this.signedConfigHash) return;
     const root = this.configAcknowledgementRoot();
@@ -703,6 +715,27 @@ export default class TephrameshPlugin extends Plugin {
     this.acceptedConfigKeyIds.add(local.keyId);
   }
 
+  private async writeCurrentConfigConfirmation(
+    local: LocalDeviceSigningRecord,
+    observedSignerKeyIds: string[],
+  ): Promise<void> {
+    if (!this.signingRootKeyId || !this.signedConfigRevision || !this.signedConfigHash) return;
+    const directory = this.currentConfigConfirmationDirectory();
+    if (!(await this.app.vault.adapter.exists(directory))) await this.app.vault.adapter.mkdir(directory);
+    const confirmation = await createConfigAcceptanceConfirmation(
+      this.signingRootKeyId,
+      this.signedConfigRevision,
+      this.signedConfigHash,
+      observedSignerKeyIds,
+      local,
+    );
+    await this.app.vault.adapter.write(
+      normalizePath(`${directory}/${local.keyId}.json`),
+      JSON.stringify(confirmation),
+    );
+    this.acceptanceConfirmations.set(local.keyId, new Set(confirmation.observedSignerKeyIds));
+  }
+
   private async refreshCurrentConfigAcknowledgements(force = false): Promise<boolean> {
     if (!this.signingRootKeyId || !this.signedConfigRevision || !this.signedConfigHash ||
         this.acknowledgementRefreshInProgress) return false;
@@ -711,8 +744,9 @@ export default class TephrameshPlugin extends Plugin {
     this.acknowledgementRefreshInProgress = true;
     this.lastAcknowledgementRefreshAt = now;
     try {
-      const previous = [...this.acceptedConfigKeyIds].sort().join("|");
+      const previous = `${[...this.acceptedConfigKeyIds].sort().join("|")}:${[...this.localAcceptanceObserverKeyIds].sort().join("|")}`;
       const accepted = new Set<string>();
+      const confirmations = new Map<string, Set<string>>();
       const directory = this.currentConfigAcknowledgementDirectory();
       if (await this.app.vault.adapter.exists(directory)) {
         const listing = await this.app.vault.adapter.list(directory);
@@ -732,6 +766,25 @@ export default class TephrameshPlugin extends Plugin {
           } catch { /* Ignore malformed, stale, revoked, or forged acknowledgements. */ }
         }
       }
+      const confirmationDirectory = this.currentConfigConfirmationDirectory();
+      if (await this.app.vault.adapter.exists(confirmationDirectory)) {
+        const listing = await this.app.vault.adapter.list(confirmationDirectory);
+        for (const path of listing.files) {
+          if (!path.endsWith(".json")) continue;
+          try {
+            const value: unknown = JSON.parse(await this.app.vault.adapter.read(path));
+            const confirmation = await verifyConfigAcceptanceConfirmation(
+              value,
+              this.signingRootKeyId,
+              this.signedConfigRevision,
+              this.signedConfigHash,
+              this.signingEnrollments,
+              this.signingRevokedEnrollmentKeyIds,
+            );
+            confirmations.set(confirmation.signerKeyId, new Set(confirmation.observedSignerKeyIds));
+          } catch { /* Ignore malformed, stale, revoked, or forged confirmations. */ }
+        }
+      }
       const local = this.getLocalSigningRecord();
       if (local?.rootKeyId === this.signingRootKeyId &&
           local.lastAcceptedRevision === this.signedConfigRevision &&
@@ -746,7 +799,30 @@ export default class TephrameshPlugin extends Plugin {
         } catch { /* Keep this installation waiting and retry on the next refresh. */ }
       }
       this.acceptedConfigKeyIds = accepted;
-      return previous !== [...accepted].sort().join("|");
+      this.acceptanceConfirmations = confirmations;
+      if (local?.rootKeyId === this.signingRootKeyId && accepted.has(local.keyId) &&
+          this.signingEnrollments.some((enrollment) => enrollment.keyId === local.keyId) &&
+          !this.signingRevokedEnrollmentKeyIds.includes(local.keyId)) {
+        const observed = [...accepted].sort();
+        const previousObserved = [...(confirmations.get(local.keyId) ?? [])].sort();
+        if (observed.join("|") !== previousObserved.join("|")) {
+          try {
+            await this.writeCurrentConfigConfirmation(local, observed);
+            confirmations.set(local.keyId, new Set(observed));
+            this.requestConfigSubpathScans();
+          } catch { /* Keep the observations unconfirmed and retry on the next refresh. */ }
+        }
+      }
+      const activeKeyIds = this.signingEnrollments
+        .map((enrollment) => enrollment.keyId)
+        .filter((keyId) => !this.signingRevokedEnrollmentKeyIds.includes(keyId));
+      this.localAcceptanceObserverKeyIds = new Set(
+        local && accepted.has(local.keyId)
+          ? activeKeyIds.filter((observerKeyId) => confirmations.get(observerKeyId)?.has(local.keyId))
+          : [],
+      );
+      const current = `${[...accepted].sort().join("|")}:${[...this.localAcceptanceObserverKeyIds].sort().join("|")}`;
+      return previous !== current;
     } finally {
       this.acknowledgementRefreshInProgress = false;
     }
@@ -1282,6 +1358,8 @@ export default class TephrameshPlugin extends Plugin {
     this.signedConfigHash = "";
     this.signedConfigConflict = undefined;
     this.acceptedConfigKeyIds.clear();
+    this.localAcceptanceObserverKeyIds.clear();
+    this.acceptanceConfirmations.clear();
     this.lastAcknowledgementRefreshAt = 0;
     this.signingTrust = "unsigned";
   }

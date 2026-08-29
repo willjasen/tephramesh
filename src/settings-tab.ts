@@ -335,6 +335,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
         const allAccepted = signingStatus.state === "enrolled" &&
           signingStatus.enrolledCount > 0 &&
           signingStatus.acceptedCount === signingStatus.enrolledCount &&
+          signingStatus.acceptanceSeenByCount === signingStatus.enrolledCount &&
           !hasPendingInstallation;
         const indicator = button.createSpan({
           cls: `tephramesh-topology-indicator tephramesh-tab-indicator${allAccepted ? "" : " is-warning"}`,
@@ -344,8 +345,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
           : signingStatus.state !== "enrolled"
           ? "This installation is not enrolled for configuration signing"
           : allAccepted
-            ? `All ${signingStatus.enrolledCount} enrolled installations accepted signed revision ${signingStatus.revision}`
-            : `${signingStatus.acceptedCount} of ${signingStatus.enrolledCount} enrolled installations accepted signed revision ${signingStatus.revision}`;
+            ? `All ${signingStatus.enrolledCount} enrolled installations accepted signed revision ${signingStatus.revision}, and all saw this installation's acceptance`
+            : `${signingStatus.acceptedCount} of ${signingStatus.enrolledCount} accepted; this installation's acceptance seen by ${signingStatus.acceptanceSeenByCount} of ${signingStatus.enrolledCount}`;
         indicator.setAttribute("title", acceptanceLabel);
         button.setAttribute("aria-label", `Signing. ${acceptanceLabel}`);
       }
@@ -849,8 +850,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
       cls: "tephramesh-enrolled-status",
     });
     new Setting(container)
-      .setName(`Accepted by ${status.acceptedCount} of ${status.enrolledCount}`)
-      .setDesc(`Signed configuration revision ${status.revision}. Each count is backed by a verified acknowledgement from that enrolled installation.`)
+      .setName(`Accepted by ${status.acceptedCount} of ${status.enrolledCount} · This acceptance seen by ${status.acceptanceSeenByCount} of ${status.enrolledCount}`)
+      .setDesc(`Signed configuration revision ${status.revision}. The Signing indicator turns green after every enrolled installation accepts it and reports seeing this installation's acceptance.`)
       .addButton((button) => button.setButtonText("Refresh").onClick(async () => {
         button.setDisabled(true).setButtonText("Refreshing…");
         try {
