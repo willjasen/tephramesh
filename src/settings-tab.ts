@@ -34,6 +34,7 @@ import { RestoreConfigVersionModal } from "./restore-config-version-modal";
 import { ResolveConfigConflictModal } from "./resolve-config-conflict-modal";
 import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
 import { ApproveEnrollmentModal } from "./approve-enrollment-modal";
+import { renderDeviceAvatar } from "./device-avatar";
 
 type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology";
 
@@ -1122,6 +1123,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
         container.querySelectorAll(".is-drag-over").forEach((element) => element.removeClass("is-drag-over"));
       });
       setting.nameEl.empty();
+      const avatar = setting.nameEl.createSpan({ cls: "tephramesh-device-avatar" });
+      renderDeviceAvatar(avatar, instance.deviceId);
       setting.nameEl.prepend(dragHandle);
       const statusIndicator = setting.nameEl.createSpan({ cls: "tephramesh-instance-status-indicator" });
       this.instanceStatusIndicators.set(instance.id, statusIndicator);
@@ -1142,10 +1145,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
         this.plugin.runtimeStatuses.get(instance.id),
       );
       this.renderSigningBadge(setting.nameEl, instance.deviceId);
-      setting.nameEl.createSpan({
-        text: ` · ${shortDeviceId(instance.deviceId)}`,
-        cls: "tephramesh-instance-heading-meta",
-      });
       const version = setting.nameEl.createSpan({
         cls: "tephramesh-instance-heading-meta",
       });
@@ -1249,6 +1248,21 @@ export class TephrameshSettingTab extends PluginSettingTab {
           }).open();
         }),
       );
+      if (instance.kind === "device") {
+        setting.addToggle((toggle) => toggle
+          .setTooltip("Write diagnostic events to this device's local log")
+          .setValue(Boolean(instance.debugEnabled))
+          .setDisabled(this.plugin.getSigningEnvironmentStatus().state !== "enrolled")
+          .onChange(async (enabled) => {
+            try {
+              await this.plugin.setInstanceDebugEnabled(instance, enabled);
+            } catch (error) {
+              toggle.setValue(Boolean(instance.debugEnabled));
+              showTephrameshNotice("error", "Debug mode unavailable", error instanceof Error ? error.message : String(error));
+            }
+          }),
+        );
+      }
       if (canRemoveInstance(this.plugin.settings.instances, instance)) {
         setting.addButton((button) =>
           button
@@ -1282,11 +1296,12 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const setting = new Setting(knownSection);
       setting.settingEl.addClass("tephramesh-instance-card");
       setting.nameEl.empty();
+      const avatar = setting.nameEl.createSpan({ cls: "tephramesh-device-avatar" });
+      renderDeviceAvatar(avatar, known.deviceId);
       const statusIndicator = setting.nameEl.createSpan({ cls: "tephramesh-instance-status-indicator" });
       this.knownStatusIndicators.set(known.deviceId, statusIndicator);
       this.updateKnownStatusIndicator(statusIndicator, known.deviceId, this.plugin.runtimeStatuses);
       setting.nameEl.appendText(` ${known.name}`);
-      setting.nameEl.createSpan({ text: ` · ${shortDeviceId(known.deviceId)}`, cls: "tephramesh-instance-heading-meta" });
       this.renderSigningBadge(setting.nameEl, known.deviceId);
       setting.addButton((button) =>
         button
@@ -1314,7 +1329,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     if (state === "unsigned") return;
     const badge = container.createSpan({
       cls: `tephramesh-signing-badge is-${state}`,
-      text: state === "signed" ? "Signed" : "Pending signing",
+      text: state === "signed" ? "✅" : "⏳",
     });
     badge.setAttribute(
       "aria-label",
