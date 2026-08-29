@@ -33,33 +33,53 @@ export class SyncthingClient {
   constructor(
     private readonly endpoint: Endpoint,
     private readonly apiKey: string,
+    private readonly onDebug?: (message: string, details?: unknown) => void,
   ) {}
 
   private async request<T>(
     path: string,
     options: Pick<RequestUrlParam, "method" | "body"> = {},
   ): Promise<T> {
+    const startedAt = Date.now();
+    const method = options.method ?? "GET";
+    this.onDebug?.("Syncthing request started", { method, path });
     const endpointError = validateEndpoint(this.endpoint, { onboarding: false });
-    if (endpointError) throw new SyncthingApiError(endpointError);
-    const response = await requestUrl({
-      url: `${endpointUrl(this.endpoint)}${path}`,
-      method: options.method ?? "GET",
-      body: options.body,
-      contentType: options.body ? "application/json" : undefined,
-      headers: {
-        Accept: "application/json",
-        "X-API-Key": this.apiKey,
-      },
-      throw: false,
-    });
-    if (response.status < 200 || response.status >= 300) {
-      throw new SyncthingApiError(
-        `Syncthing returned HTTP ${response.status}.`,
-        response.status,
-      );
+    try {
+      if (endpointError) throw new SyncthingApiError(endpointError);
+      const response = await requestUrl({
+        url: `${endpointUrl(this.endpoint)}${path}`,
+        method,
+        body: options.body,
+        contentType: options.body ? "application/json" : undefined,
+        headers: {
+          Accept: "application/json",
+          "X-API-Key": this.apiKey,
+        },
+        throw: false,
+      });
+      if (response.status < 200 || response.status >= 300) {
+        throw new SyncthingApiError(
+          `Syncthing returned HTTP ${response.status}.`,
+          response.status,
+        );
+      }
+      this.onDebug?.("Syncthing request completed", {
+        method,
+        path,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+      if (!response.text) return undefined as T;
+      return response.json as T;
+    } catch (error) {
+      this.onDebug?.("Syncthing request failed", {
+        method,
+        path,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
-    if (!response.text) return undefined as T;
-    return response.json as T;
   }
 
   async getSystemStatus(): Promise<SyncthingSystemStatus> {

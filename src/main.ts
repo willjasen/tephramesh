@@ -2640,7 +2640,11 @@ export default class TephrameshPlugin extends Plugin {
     try {
       const apiKey = this.getApiKey(instance.id);
       if (!apiKey) throw new Error("API key is unavailable in the encrypted configuration");
-      const client = new SyncthingClient(instance.endpoint, apiKey);
+      const client = new SyncthingClient(
+        instance.endpoint,
+        apiKey,
+        (message, details) => void debug(message, details),
+      );
       // Obsidian's requestUrl uses Electron's shared Chromium network stack.
       // Keep each host to one request at a time so polling several instances
       // cannot create a large simultaneous socket burst.
@@ -2738,7 +2742,13 @@ export default class TephrameshPlugin extends Plugin {
         peerConnections,
         ...rates,
       });
-      void debug("status check completed", { ok: true });
+      void debug("status check completed", {
+        ok: true,
+        folderState: folder?.state,
+        needFiles: folder?.needFiles ?? 0,
+        needBytes: folder?.needBytes ?? 0,
+        paused: Boolean(folderConfig?.paused),
+      });
     } catch (error) {
       this.runtimeStatuses.set(instance.id, {
         checkedAt: Date.now(),

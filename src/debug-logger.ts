@@ -1,4 +1,5 @@
 import { normalizePath, type DataAdapter } from "obsidian";
+import { shortDeviceId } from "./security";
 
 /** Local, best-effort diagnostics. Entries deliberately contain no credentials or protected settings. */
 export class DebugLogger {
@@ -10,7 +11,7 @@ export class DebugLogger {
   ) {}
 
   async write(deviceId: string, message: string, details?: unknown): Promise<void> {
-    const path = normalizePath(`${this.pluginDirectory}/logs/${deviceId}.log`);
+    const path = normalizePath(`${this.pluginDirectory}/logs/${shortDeviceId(deviceId)}.log`);
     const previous = this.queues.get(deviceId) ?? Promise.resolve();
     const next = previous.then(async () => {
       try {
