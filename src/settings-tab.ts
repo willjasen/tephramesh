@@ -34,6 +34,7 @@ import { DeleteConfigModal } from "./delete-config-modal";
 import { formatDataSize } from "./format";
 import { operatingSystemPresentation } from "./platform";
 import { RestoreConfigVersionModal } from "./restore-config-version-modal";
+import { ResolveConfigConflictModal } from "./resolve-config-conflict-modal";
 import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
 
 function formatFolderUpdatedAt(stateChanged: string | undefined): string {
@@ -120,11 +121,33 @@ export class TephrameshSettingTab extends PluginSettingTab {
       this.renderEncryptionUnlock(containerEl);
       return;
     }
+    const signedConflict = this.plugin.getSignedConfigConflict();
+    if (signedConflict) {
+      this.renderSignedConfigConflict(containerEl, signedConflict.revision);
+      return;
+    }
     if (!this.plugin.settings.onboardingComplete) {
       this.renderOnboarding(containerEl);
       return;
     }
     this.renderSectionTabs(containerEl);
+  }
+
+  private renderSignedConfigConflict(container: HTMLElement, revision: number): void {
+    container.createEl("h2", { text: "Configuration conflict" });
+    container.createEl("p", {
+      text: `This installation and another enrolled installation independently signed revision ${revision}. The age identity is valid and both versions remain protected. Choose the currently synchronized configuration to promote it as a new signed revision, or make another change on the installation whose configuration you want to keep.`,
+    });
+    new Setting(container)
+      .setName("Currently synchronized configuration")
+      .setDesc("Accept the configuration that Syncthing most recently placed in data.json. Any journaled competing revision remains encrypted for future recovery.")
+      .addButton((button) => button.setButtonText("Keep synchronized config").setWarning().onClick(() => {
+        new ResolveConfigConflictModal(this.app, revision, async () => {
+          await this.plugin.acceptSynchronizedConfigConflict();
+          this.render();
+          showTephrameshNotice("success", "Configuration conflict resolved", `Revision ${revision + 1} is now the latest signed configuration.`);
+        }).open();
+      }));
   }
 
   private renderEncryptionSetup(container: HTMLElement): void {
@@ -184,6 +207,14 @@ export class TephrameshSettingTab extends PluginSettingTab {
           identity = "";
           this.display();
           showTephrameshNotice("success", "Tephramesh unlocked");
+          const conflict = this.plugin.getSignedConfigConflict();
+          if (conflict) {
+            showTephrameshNotice(
+              "warning",
+              "Configuration conflict detected",
+              `Revision ${conflict.revision} was created independently on another installation. No configuration was overwritten; choose which changes to keep before saving again.`,
+            );
+          }
         } catch (error) {
           showTephrameshNotice(
             "error",

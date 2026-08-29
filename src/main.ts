@@ -57,12 +57,14 @@ import {
   encodeEnrollmentCode,
   generateSigningKeyPair,
   isSignedConfigEnvelope,
+  SignedConfigConflictError,
   sha256Canonical,
   verifyEnrollmentApproval,
   verifySignedConfigEnvelope,
   type DeviceEnrollment,
   type LocalDeviceSigningRecord,
 } from "./config-signing";
+import { createConfigJournalRecord, isConfigJournalRecord, type ConfigJournalRecord } from "./config-journal";
 
 interface EncryptedSettingsEnvelope {
   schemaVersion: 3;
@@ -99,10 +101,14 @@ export default class TephrameshPlugin extends Plugin {
   private configHistoryBlocks: ConfigHistoryBlock[] = [];
   private signingRootKeyId = "";
   private signingEnrollments: DeviceEnrollment[] = [];
+  private signingRevokedEnrollmentKeyIds: string[] = [];
   private signedConfigRevision = 0;
   private signedConfigHash = "";
+  private signedConfigConflict?: { revision: number; envelopeHash: string };
   private signingTrust: "unsigned" | "approval-required" | "enrolled" = "unsigned";
   private storageFormat: 2 | 3 = 3;
+  private saveQueue: Promise<void> = Promise.resolve();
+  private configJournalRecords: ConfigJournalRecord[] = [];
   private settingTab!: TephrameshSettingTab;
   private pollingTimer?: number;
   private statusPollingEnabled = false;
@@ -184,6 +190,7 @@ export default class TephrameshPlugin extends Plugin {
       this.encryptedData = stored.encryptedData;
       this.configHistoryBlocks = [];
       this.storageFormat = 3;
+      await this.loadConfigJournal();
       return;
     }
     const legacy = stored as LegacyEncryptedSettings | null;
@@ -203,11 +210,34 @@ export default class TephrameshPlugin extends Plugin {
         : "";
     this.storageFormat = 2;
     this.configHistoryBlocks = [];
+    await this.loadConfigJournal();
   }
 
   async saveSettings(): Promise<void> {
+    // Obsidian does not serialize concurrent saveData calls. Queue the whole
+    // read/derive/encrypt/write/update sequence so two callers cannot derive
+    // the same signed revision from stale in-memory state.
+    let release!: () => void;
+    const previous = this.saveQueue;
+    this.saveQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      await this.saveSettingsUnsafe();
+    } finally {
+      release();
+    }
+  }
+
+  private async saveSettingsUnsafe(): Promise<void> {
     if (!this.secrets || !this.settings.ageRecipient) {
       throw new Error("Unlock Tephramesh encryption before saving settings.");
+    }
+    if (this.signedConfigConflict) {
+      throw new Error(
+        "Resolve the signed configuration conflict before saving Tephramesh settings.",
+      );
     }
     const {
       ageRecipient,
@@ -251,12 +281,21 @@ export default class TephrameshPlugin extends Plugin {
         this.signingRootKeyId,
         this.signedConfigRevision + 1,
         localSigning,
+        this.signingRevokedEnrollmentKeyIds,
       );
       nextSignedHash = await sha256Canonical(nextSignedEnvelope);
       encryptedPayload = nextSignedEnvelope;
     }
     const encryptedData = await encryptConfigHistory(ageRecipient, encryptedPayload);
     this.storageFormat = 3;
+    if (nextSignedEnvelope && nextSignedHash) {
+      await this.appendConfigJournal(
+        nextSignedEnvelope.revision,
+        nextSignedHash,
+        nextSignedEnvelope.signerKeyId,
+        encryptedData,
+      );
+    }
     await this.saveData({
       schemaVersion: 3,
       ageRecipient,
@@ -291,6 +330,12 @@ export default class TephrameshPlugin extends Plugin {
     const dataPath = normalizePath(`${pluginDirectory}/data.json`);
     if (await this.app.vault.adapter.exists(dataPath)) {
       await this.app.vault.adapter.remove(dataPath);
+    }
+    const journalDirectory = this.configJournalDirectory();
+    if (await this.app.vault.adapter.exists(journalDirectory)) {
+      const listing = await this.app.vault.adapter.list(journalDirectory);
+      for (const path of listing.files) await this.app.vault.adapter.remove(path);
+      await this.app.vault.adapter.rmdir(journalDirectory, false);
     }
 
     this.settings = structuredClone(DEFAULT_SETTINGS);
@@ -490,6 +535,34 @@ export default class TephrameshPlugin extends Plugin {
       // enrolled installation must still approve the new key.
       return !enrolled || !local;
     });
+  }
+
+  private configJournalDirectory(): string {
+    const pluginDirectory = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    return normalizePath(`${pluginDirectory}/config-journal`);
+  }
+
+  private async appendConfigJournal(revision: number, envelopeHash: string, signerKeyId: string, encryptedData: string): Promise<void> {
+    const directory = this.configJournalDirectory();
+    if (!(await this.app.vault.adapter.exists(directory))) await this.app.vault.adapter.mkdir(directory);
+    const record = createConfigJournalRecord(revision, envelopeHash, signerKeyId, encryptedData);
+    await this.app.vault.adapter.write(normalizePath(`${directory}/${record.changeId}.json`), JSON.stringify(record));
+    this.configJournalRecords.push(record);
+  }
+
+  private async loadConfigJournal(): Promise<void> {
+    this.configJournalRecords = [];
+    const directory = this.configJournalDirectory();
+    if (!(await this.app.vault.adapter.exists(directory))) return;
+    const listing = await this.app.vault.adapter.list(directory);
+    for (const path of listing.files) {
+      if (!path.endsWith(".json")) continue;
+      try {
+        const parsed: unknown = JSON.parse(await this.app.vault.adapter.read(path));
+        if (isConfigJournalRecord(parsed)) this.configJournalRecords.push(parsed);
+      } catch { /* Ignore incomplete or unrelated journal files. */ }
+    }
+    this.configJournalRecords.sort((a, b) => a.revision - b.revision || a.createdAt.localeCompare(b.createdAt));
   }
 
   private getAllSigningInstallationOptions(): Array<{
@@ -722,6 +795,38 @@ export default class TephrameshPlugin extends Plugin {
     if (this.statusPollingEnabled) void this.refreshStatuses(true);
   }
 
+  getSignedConfigConflict(): { revision: number; envelopeHash: string } | undefined {
+    return this.signedConfigConflict;
+  }
+
+  async acceptSynchronizedConfigConflict(): Promise<void> {
+    const conflict = this.signedConfigConflict;
+    const local = this.getLocalSigningRecord();
+    if (!conflict || !local?.rootKeyId || this.signingTrust !== "enrolled") {
+      throw new Error("There is no signed configuration conflict to resolve.");
+    }
+    if (this.signedConfigRevision !== conflict.revision || this.signedConfigHash !== conflict.envelopeHash) {
+      throw new Error("The synchronized configuration changed. Reload Tephramesh before resolving the conflict.");
+    }
+    const previousLocal = structuredClone(local);
+    const previousConflict = conflict;
+    this.setLocalSigningRecord({
+      ...local,
+      lastAcceptedRevision: this.signedConfigRevision,
+      lastAcceptedEnvelopeHash: this.signedConfigHash,
+      lastAcceptedEnrollmentKeyIds: this.signingEnrollments.map((enrollment) => enrollment.keyId),
+      lastAcceptedRevokedEnrollmentKeyIds: [...this.signingRevokedEnrollmentKeyIds],
+    });
+    this.signedConfigConflict = undefined;
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      this.setLocalSigningRecord(previousLocal);
+      this.signedConfigConflict = previousConflict;
+      throw error;
+    }
+  }
+
   async setApiKey(instanceId: string, apiKey: string): Promise<void> {
     if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
     this.secrets.apiKeys[instanceId] = apiKey;
@@ -783,11 +888,23 @@ export default class TephrameshPlugin extends Plugin {
           if (local.rootKeyId !== verified.envelope.rootKeyId) {
             throw new Error("The signed configuration uses a different enrollment root.");
           }
-          assertSignedRevisionAccepted(
-            local,
-            verified.envelope.revision,
-            verified.hash,
-          );
+          let conflictingRevision = false;
+          try {
+            assertSignedRevisionAccepted(
+              local,
+              verified.envelope.revision,
+              verified.hash,
+            );
+          } catch (error) {
+            if (!(error instanceof SignedConfigConflictError)) {
+              throw error;
+            }
+            conflictingRevision = true;
+            this.signedConfigConflict = {
+              revision: verified.envelope.revision,
+              envelopeHash: verified.hash,
+            };
+          }
           assertEnrollmentMembershipAccepted(
             local,
             verified.envelope.enrollments,
@@ -814,17 +931,22 @@ export default class TephrameshPlugin extends Plugin {
             throw new Error("This installation's signing key has the wrong device binding.");
           }
           this.signingTrust = "enrolled";
-          enrolledLocal = {
-            ...local,
-            lastAcceptedRevision: verified.envelope.revision,
-            lastAcceptedEnvelopeHash: verified.hash,
-            lastAcceptedEnrollmentKeyIds: verified.envelope.enrollments.map((candidate) => candidate.keyId),
-            lastAcceptedRevokedEnrollmentKeyIds: verified.envelope.revokedEnrollmentKeyIds ?? [],
-          };
+          if (!conflictingRevision) {
+            enrolledLocal = {
+              ...local,
+              lastAcceptedRevision: verified.envelope.revision,
+              lastAcceptedEnvelopeHash: verified.hash,
+              lastAcceptedEnrollmentKeyIds: verified.envelope.enrollments.map((candidate) => candidate.keyId),
+              lastAcceptedRevokedEnrollmentKeyIds: verified.envelope.revokedEnrollmentKeyIds ?? [],
+            };
+          }
         } else {
           this.signingTrust = "approval-required";
         }
         this.signingRootKeyId = verified.envelope.rootKeyId;
+        this.signingRevokedEnrollmentKeyIds = [
+          ...(verified.envelope.revokedEnrollmentKeyIds ?? []),
+        ];
         if (!completePendingApproval) {
           this.signingEnrollments = structuredClone(verified.envelope.enrollments);
         }
@@ -915,8 +1037,10 @@ export default class TephrameshPlugin extends Plugin {
   private resetSigningRuntimeState(): void {
     this.signingRootKeyId = "";
     this.signingEnrollments = [];
+    this.signingRevokedEnrollmentKeyIds = [];
     this.signedConfigRevision = 0;
     this.signedConfigHash = "";
+    this.signedConfigConflict = undefined;
     this.signingTrust = "unsigned";
   }
 

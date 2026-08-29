@@ -68,6 +68,13 @@ export interface LocalDeviceSigningRecord extends SigningKeyPairExport {
   lastAcceptedRevokedEnrollmentKeyIds?: string[];
 }
 
+export class SignedConfigConflictError extends Error {
+  constructor() {
+    super("A conflicting signed Tephramesh configuration was rejected.");
+    this.name = "SignedConfigConflictError";
+  }
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -448,7 +455,7 @@ export function assertSignedRevisionAccepted(
   if (local.lastAcceptedRevision === revision &&
       local.lastAcceptedEnvelopeHash &&
       local.lastAcceptedEnvelopeHash !== envelopeHash) {
-    throw new Error("A conflicting signed Tephramesh configuration was rejected.");
+    throw new SignedConfigConflictError();
   }
 }
 
