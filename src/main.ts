@@ -14,7 +14,12 @@ import {
   isRuntimeStatusFresh,
   meshPeerPolicy,
 } from "./topology";
-import { pendingFolderPaths, pendingNotePathsForHostThreshold } from "./note-sync";
+import {
+  noteSyncPollIntervalMilliseconds,
+  pendingFolderMissingHosts,
+  pendingNoteMissingHostsForThreshold,
+} from "./note-sync";
+import { notePartialScanPath } from "./note-scan";
 import {
   inspectReconciliationSnapshot,
   repairBlockedReasons,
@@ -124,12 +129,15 @@ export default class TephrameshPlugin extends Plugin {
   private lastAcknowledgementRefreshAt = 0;
   private configSubpathScans = new Map<string, Promise<void>>();
   private remoteConfigSubpathScanTimer?: number;
+  private noteScanDebounceTimers = new Map<string, number>();
+  private pendingNoteScans = new Set<string>();
+  private noteScanQueueInProgress = false;
   private settingTab!: TephrameshSettingTab;
   private pollingTimer?: number;
   private statusPollingEnabled = false;
   private noteSyncTimer?: number;
   private noteSyncRefreshInProgress = false;
-  private pendingNotePaths = new Set<string>();
+  private pendingNoteMissingHosts = new Map<string, Set<number>>();
   private fileExplorerObserver?: MutationObserver;
   private refreshInProgress = false;
   private forcedStatusRefreshPending = false;
@@ -149,6 +157,7 @@ export default class TephrameshPlugin extends Plugin {
   private static readonly RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
   private static readonly LABEL_SYNC_DEBOUNCE_MS = 750;
   private static readonly REMOTE_CONFIG_SCAN_DELAY_MS = 3_000;
+  private static readonly NOTE_SCAN_DEBOUNCE_MS = 500;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -162,6 +171,21 @@ export default class TephrameshPlugin extends Plugin {
         await this.refreshStatuses(true);
         showTephrameshNotice("success", "Status refreshed");
       },
+    });
+    this.app.workspace.onLayoutReady(() => {
+      this.registerEvent(this.app.vault.on("modify", (file) => {
+        this.scheduleLocalNoteScan(file.path);
+      }));
+      this.registerEvent(this.app.vault.on("create", (file) => {
+        this.scheduleLocalNoteScan(file.path);
+      }));
+      this.registerEvent(this.app.vault.on("delete", (file) => {
+        this.scheduleLocalNoteScan(file.path);
+      }));
+      this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+        this.scheduleLocalNoteScan(oldPath);
+        this.scheduleLocalNoteScan(file.path);
+      }));
     });
     this.restartNoteSyncPolling();
     void this.refreshReconciliation();
@@ -179,6 +203,9 @@ export default class TephrameshPlugin extends Plugin {
     if (this.remoteConfigSubpathScanTimer !== undefined) {
       window.clearTimeout(this.remoteConfigSubpathScanTimer);
     }
+    for (const timer of this.noteScanDebounceTimers.values()) window.clearTimeout(timer);
+    this.noteScanDebounceTimers.clear();
+    this.pendingNoteScans.clear();
   }
 
   async onExternalSettingsChange(): Promise<void> {
@@ -397,6 +424,57 @@ export default class TephrameshPlugin extends Plugin {
     }));
   }
 
+  private scheduleLocalNoteScan(rawPath: string): void {
+    const path = notePartialScanPath(rawPath);
+    if (!path) return;
+    const previous = this.noteScanDebounceTimers.get(path);
+    if (previous !== undefined) window.clearTimeout(previous);
+    const timer = window.setTimeout(() => {
+      this.noteScanDebounceTimers.delete(path);
+      this.pendingNoteScans.add(path);
+      void this.drainLocalNoteScanQueue();
+    }, TephrameshPlugin.NOTE_SCAN_DEBOUNCE_MS);
+    this.noteScanDebounceTimers.set(path, timer);
+  }
+
+  private localBoundDevice(): MeshInstance | undefined {
+    const local = this.getLocalSigningRecord();
+    return activeMeshInstances(this.settings.instances).find((instance) =>
+      instance.kind === "device" &&
+      (instance.deviceId === local?.deviceId || local?.bindingId === `mesh:${instance.id}`)
+    );
+  }
+
+  private async drainLocalNoteScanQueue(): Promise<void> {
+    if (this.noteScanQueueInProgress) return;
+    this.noteScanQueueInProgress = true;
+    try {
+      while (this.pendingNoteScans.size > 0) {
+        const path = this.pendingNoteScans.values().next().value as string;
+        this.pendingNoteScans.delete(path);
+        if (
+          this.signingTrust !== "enrolled" ||
+          !this.secrets ||
+          !this.settings.folderId
+        ) continue;
+        const device = this.localBoundDevice();
+        if (!device) continue;
+        const apiKey = this.getApiKey(device.id);
+        if (!apiKey) continue;
+        try {
+          await new SyncthingClient(device.endpoint, apiKey).scanFolderSubpath(
+            this.settings.folderId,
+            path,
+          );
+        } catch {
+          // Syncthing's watcher and scheduled folder scan remain the fallback.
+        }
+      }
+    } finally {
+      this.noteScanQueueInProgress = false;
+    }
+  }
+
   async deleteConfig(): Promise<void> {
     if (this.signingTrust !== "enrolled" && !this.canDeleteConfigForRecovery()) {
       throw new Error("This installation must be enrolled for configuration signing before deleting config.");
@@ -435,7 +513,7 @@ export default class TephrameshPlugin extends Plugin {
       issues: [],
       repairBlockedReasons: [],
     };
-    this.pendingNotePaths.clear();
+    this.pendingNoteMissingHosts.clear();
     this.clearNoteSyncBadges();
     if (this.folderLabelSyncTimer !== undefined) {
       window.clearTimeout(this.folderLabelSyncTimer);
@@ -1988,7 +2066,7 @@ export default class TephrameshPlugin extends Plugin {
     });
     this.noteSyncTimer = window.setInterval(
       () => void this.refreshNoteSyncBadges(),
-      Math.max(1, this.settings.noteSyncPollIntervalSeconds) * 1000,
+      noteSyncPollIntervalMilliseconds(this.settings.noteSyncPollIntervalSeconds),
     );
     void this.refreshNoteSyncBadges();
   }
@@ -2001,14 +2079,14 @@ export default class TephrameshPlugin extends Plugin {
       !this.secretsAreUnlocked() ||
       !this.settings.folderId
     ) {
-      this.pendingNotePaths.clear();
+      this.pendingNoteMissingHosts.clear();
       this.renderNoteSyncBadges();
       return;
     }
 
     const activeInstances = activeMeshInstances(this.settings.instances);
     if (activeInstances.length < 2) {
-      this.pendingNotePaths.clear();
+      this.pendingNoteMissingHosts.clear();
       this.renderNoteSyncBadges();
       return;
     }
@@ -2038,7 +2116,7 @@ export default class TephrameshPlugin extends Plugin {
                 client.getRemoteNeededFiles(this.settings.folderId, peer.deviceId),
               ),
           ]);
-          this.pendingNotePaths = pendingNotePathsForHostThreshold(
+          this.pendingNoteMissingHosts = pendingNoteMissingHostsForThreshold(
             neededByPeer,
             activeInstances.length,
             this.settings.noteSyncRequiredHosts,
@@ -2062,24 +2140,30 @@ export default class TephrameshPlugin extends Plugin {
       const existing = title.querySelector(
         ":scope > .tephramesh-note-sync-icon",
       ) as HTMLElement | null;
-      if (!path || !this.pendingNotePaths.has(path)) {
+      const missingHostCount = path ? this.pendingNoteMissingHosts.get(path)?.size : undefined;
+      if (!path || !missingHostCount) {
         existing?.remove();
         title.classList.remove("tephramesh-note-sync-pending");
         title.removeAttribute("aria-label");
         continue;
       }
       title.classList.add("tephramesh-note-sync-pending");
-      title.setAttribute("aria-label", `${path} — waiting to sync`);
-      if (existing) continue;
-      const icon = title.createSpan({
+      title.setAttribute("aria-label", `${path} — waiting to sync to ${missingHostCount} ${missingHostCount === 1 ? "host" : "hosts"}`);
+      const icon = existing ?? title.createSpan({
         cls: "tephramesh-note-sync-icon",
         attr: { "aria-hidden": "true" },
       });
-      setIcon(icon, "refresh-cw");
-      title.prepend(icon);
+      if (!existing) {
+        setIcon(icon, "refresh-cw");
+        icon.createSpan({ cls: "tephramesh-note-sync-count" });
+        title.prepend(icon);
+      }
+      const count = icon.querySelector<HTMLElement>(".tephramesh-note-sync-count") ??
+        icon.createSpan({ cls: "tephramesh-note-sync-count" });
+      if (count.textContent !== String(missingHostCount)) count.setText(String(missingHostCount));
     }
 
-    const pendingFolders = pendingFolderPaths(this.pendingNotePaths);
+    const pendingFolders = pendingFolderMissingHosts(this.pendingNoteMissingHosts);
     for (const title of Array.from(
       document.querySelectorAll<HTMLElement>(".nav-folder-title[data-path]"),
     )) {
@@ -2087,21 +2171,27 @@ export default class TephrameshPlugin extends Plugin {
       const existing = title.querySelector(
         ":scope > .tephramesh-folder-sync-icon",
       ) as HTMLElement | null;
-      if (!path || !pendingFolders.has(path)) {
+      const missingHostCount = path ? pendingFolders.get(path)?.size : undefined;
+      if (!path || !missingHostCount) {
         existing?.remove();
         title.classList.remove("tephramesh-folder-sync-pending");
         title.removeAttribute("aria-label");
         continue;
       }
       title.classList.add("tephramesh-folder-sync-pending");
-      title.setAttribute("aria-label", `${path} — contains notes waiting to sync`);
-      if (existing) continue;
-      const icon = title.createSpan({
+      title.setAttribute("aria-label", `${path} — ${missingHostCount} ${missingHostCount === 1 ? "host is" : "hosts are"} missing one or more notes`);
+      const icon = existing ?? title.createSpan({
         cls: "tephramesh-folder-sync-icon",
         attr: { "aria-hidden": "true" },
       });
-      setIcon(icon, "refresh-cw");
-      title.prepend(icon);
+      if (!existing) {
+        setIcon(icon, "refresh-cw");
+        icon.createSpan({ cls: "tephramesh-note-sync-count" });
+        title.prepend(icon);
+      }
+      const count = icon.querySelector<HTMLElement>(".tephramesh-note-sync-count") ??
+        icon.createSpan({ cls: "tephramesh-note-sync-count" });
+      if (count.textContent !== String(missingHostCount)) count.setText(String(missingHostCount));
     }
   }
 

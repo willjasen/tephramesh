@@ -462,6 +462,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       .setDesc("Seconds between checks for notes that active mesh instances still need.")
       .addDropdown((dropdown) =>
         dropdown
+          .addOption("0.5", "0.5 seconds")
           .addOption("1", "1 second")
           .addOption("5", "5 seconds")
           .addOption("10", "10 seconds")

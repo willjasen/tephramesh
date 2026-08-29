@@ -628,6 +628,7 @@ button.tephramesh-approve-button:hover {
   flex: 0 0 18px;
   height: 18px;
   margin-right: var(--size-4-1);
+  position: relative;
   width: 18px;
 }
 
@@ -636,6 +637,25 @@ button.tephramesh-approve-button:hover {
   height: 18px;
   stroke-width: 2.25;
   width: 18px;
+}
+
+.tephramesh-note-sync-count {
+  align-items: center;
+  background: var(--background-primary);
+  border-radius: 999px;
+  color: var(--color-blue, #59c2ff);
+  display: inline-flex;
+  font-size: 8px;
+  font-weight: var(--font-semibold);
+  height: 11px;
+  justify-content: center;
+  left: 50%;
+  line-height: 11px;
+  min-width: 11px;
+  padding: 0 1px;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .tephramesh-reconciliation {
