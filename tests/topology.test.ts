@@ -98,6 +98,7 @@ describe("Instances tab indicator", () => {
   });
 
   it("matches each instance row's status state", () => {
+    expect(instanceIndicatorState(instances[0]!, undefined, 5)).toBe("warning");
     expect(instanceIndicatorState(instances[0]!, runtime("idle"), 5)).toBe("online");
     expect(instanceIndicatorState(instances[0]!, runtime("scanning"), 5)).toBe("scanning");
     expect(instanceIndicatorState(instances[0]!, runtime("sync-waiting"), 5)).toBe("syncing");
@@ -116,6 +117,14 @@ describe("Instances tab indicator", () => {
     expect(instancesIndicatorState(instances, statuses, 5)).toBe("warning");
     statuses.set("laptop", runtime("idle", { ok: false }));
     expect(instancesIndicatorState(instances, statuses, 5)).toBe("unavailable");
+  });
+
+  it("stays yellow while any configured instance has not been checked", () => {
+    const statuses = new Map<string, InstanceRuntimeStatus>([
+      ["laptop", runtime("idle")],
+      ["phone", runtime("idle")],
+    ]);
+    expect(instancesIndicatorState(instances, statuses, 5)).toBe("warning");
   });
 });
 

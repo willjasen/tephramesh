@@ -16,6 +16,7 @@ export function instanceIndicatorState(
   timeoutSeconds: number,
 ): InstanceIndicatorState {
   if (instance.setupState === "pending" || status?.folderPaused) return "warning";
+  if (!status) return "warning";
   if (status && !isRuntimeStatusFresh(status, timeoutSeconds)) return "unavailable";
   if (status?.folder?.state === "scanning") return "scanning";
   if (isSyncthingSyncState(status?.folder?.state)) return "syncing";

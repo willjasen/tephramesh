@@ -1332,6 +1332,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
     );
     const label = instance.setupState === "pending"
       ? "Pending setup"
+      : !status
+        ? "Not checked yet"
       : state === "unavailable"
         ? "Unavailable"
         : status?.folderPaused
