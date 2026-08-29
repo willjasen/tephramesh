@@ -1,4 +1,4 @@
-import { normalizePath, Plugin, setIcon } from "obsidian";
+import { MarkdownView, normalizePath, Plugin, setIcon, type WorkspaceLeaf } from "obsidian";
 import { coherentOfflineTimeoutSeconds, DEFAULT_SETTINGS, normalizeInstanceDisplayOrder, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings, type KnownDevice } from "./model";
 import { TephrameshSettingTab } from "./settings-tab";
 import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
@@ -2193,6 +2193,92 @@ export default class TephrameshPlugin extends Plugin {
         icon.createSpan({ cls: "tephramesh-note-sync-count" });
       if (count.textContent !== String(missingHostCount)) count.setText(String(missingHostCount));
     }
+
+    this.renderOpenNoteSyncBadges();
+  }
+
+  private renderOpenNoteSyncBadges(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      if (!(leaf.view instanceof MarkdownView)) continue;
+      const path = leaf.view.file?.path.replaceAll("\\", "/");
+      const missingHostCount = path ? this.pendingNoteMissingHosts.get(path)?.size : undefined;
+      const statusLabel = path && missingHostCount
+        ? `${path} — waiting to sync to ${missingHostCount} ${missingHostCount === 1 ? "host" : "hosts"}`
+        : undefined;
+
+      for (const inlineTitle of Array.from(
+        leaf.view.containerEl.querySelectorAll<HTMLElement>(".inline-title"),
+      )) {
+        this.renderTitleSyncIcon(
+          inlineTitle,
+          "tephramesh-inline-title-sync-icon",
+          missingHostCount,
+          statusLabel,
+          "after",
+        );
+      }
+
+      const tabHeader = (leaf as WorkspaceLeaf & { tabHeaderEl?: HTMLElement }).tabHeaderEl;
+      const tabTitle = tabHeader?.querySelector<HTMLElement>(
+        ".workspace-tab-header-inner-title",
+      );
+      if (tabTitle) {
+        this.renderTitleSyncIcon(
+          tabTitle,
+          "tephramesh-tab-title-sync-icon",
+          missingHostCount,
+          statusLabel,
+          "before",
+        );
+      }
+    }
+  }
+
+  private renderTitleSyncIcon(
+    title: HTMLElement,
+    iconClass: string,
+    missingHostCount: number | undefined,
+    statusLabel: string | undefined,
+    placement: "before" | "after",
+  ): void {
+    const existing = title.parentElement?.querySelector<HTMLElement>(
+      `:scope > .${iconClass}`,
+    );
+    if (!missingHostCount || !statusLabel) {
+      existing?.remove();
+      if (placement === "after") {
+        title.parentElement?.classList.remove("tephramesh-inline-title-with-sync");
+      }
+      return;
+    }
+    const icon = existing ?? createSpan({
+      cls: `tephramesh-title-sync-icon ${iconClass}`,
+      attr: { "aria-label": statusLabel, role: "img", title: statusLabel },
+    });
+    icon.setAttribute("aria-label", statusLabel);
+    icon.setAttribute("title", statusLabel);
+    if (!existing) {
+      setIcon(icon, "refresh-cw");
+      icon.createSpan({ cls: "tephramesh-note-sync-count" });
+    }
+    if (placement === "after") {
+      const container = title.parentElement;
+      container?.classList.add("tephramesh-inline-title-with-sync");
+      if (icon.previousElementSibling !== title) title.after(icon);
+      if (container) {
+        const titleRange = document.createRange();
+        titleRange.selectNodeContents(title);
+        const textBounds = titleRange.getBoundingClientRect();
+        const containerBounds = container.getBoundingClientRect();
+        icon.style.left = `${textBounds.left - containerBounds.left - 26}px`;
+        icon.style.top = `${textBounds.top - containerBounds.top + (textBounds.height - 18) / 2}px`;
+      }
+    } else if (icon.nextElementSibling !== title) {
+      title.before(icon);
+    }
+    const count = icon.querySelector<HTMLElement>(".tephramesh-note-sync-count") ??
+      icon.createSpan({ cls: "tephramesh-note-sync-count" });
+    if (count.textContent !== String(missingHostCount)) count.setText(String(missingHostCount));
   }
 
   private clearNoteSyncBadges(): void {
@@ -2213,6 +2299,16 @@ export default class TephrameshPlugin extends Plugin {
       title.querySelector(":scope > .tephramesh-folder-sync-icon")?.remove();
       title.classList.remove("tephramesh-folder-sync-pending");
       title.removeAttribute("aria-label");
+    }
+    for (const icon of Array.from(
+      document.querySelectorAll<HTMLElement>(".tephramesh-title-sync-icon"),
+    )) {
+      icon.remove();
+    }
+    for (const container of Array.from(
+      document.querySelectorAll<HTMLElement>(".tephramesh-inline-title-with-sync"),
+    )) {
+      container.classList.remove("tephramesh-inline-title-with-sync");
     }
   }
 
