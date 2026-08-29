@@ -439,6 +439,15 @@ export default class TephrameshPlugin extends Plugin {
     this.restartNoteSyncPolling();
   }
 
+  async getConfigFileSize(): Promise<number | undefined> {
+    const pluginDirectory =
+      this.manifest.dir ??
+      `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    const dataPath = normalizePath(`${pluginDirectory}/data.json`);
+    const stats = await this.app.vault.adapter.stat(dataPath);
+    return stats?.size;
+  }
+
   hasEncryptionConfigured(): boolean {
     return Boolean(this.settings.ageRecipient && this.encryptedData);
   }

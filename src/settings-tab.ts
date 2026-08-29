@@ -25,7 +25,7 @@ import { formatTransferRate } from "./syncthing-traffic";
 import { EditEndpointModal } from "./edit-endpoint-modal";
 import { MeshNotReadyError } from "./mesh-errors";
 import { DeleteConfigModal } from "./delete-config-modal";
-import { formatDataSize } from "./format";
+import { formatDataSize, formatFileSize } from "./format";
 import { operatingSystemPresentation } from "./platform";
 import { RestoreConfigVersionModal } from "./restore-config-version-modal";
 import { ResolveConfigConflictModal } from "./resolve-config-conflict-modal";
@@ -567,6 +567,24 @@ export class TephrameshSettingTab extends PluginSettingTab {
           this.plugin.settings.configHistoryVersions = count;
           await this.plugin.saveSettings();
         });
+      });
+
+    const fileSizeSetting = new Setting(container)
+      .setName("Config file size")
+      .setDesc("Calculating data.json size…");
+    void this.plugin.getConfigFileSize()
+      .then((bytes) => {
+        if (!fileSizeSetting.settingEl.isConnected) return;
+        fileSizeSetting.setDesc(
+          bytes === undefined
+            ? "data.json is not currently available."
+            : `data.json is ${formatFileSize(bytes)} on disk.`,
+        );
+      })
+      .catch(() => {
+        if (fileSizeSetting.settingEl.isConnected) {
+          fileSizeSetting.setDesc("data.json size is currently unavailable.");
+        }
       });
   }
 
