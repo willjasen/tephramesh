@@ -486,26 +486,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderConfig(container: HTMLElement): void {
-    new Setting(container)
-      .setName("Saved config versions")
-      .setDesc("Number of encrypted configuration versions to retain (1–10).")
-      .addText((text) => {
-        text.inputEl.type = "number";
-        text.inputEl.min = "1";
-        text.inputEl.max = "10";
-        text.inputEl.step = "1";
-        text.setValue(String(this.plugin.settings.configHistoryVersions));
-        text.onChange(async (value) => {
-          const count = Number(value);
-          if (!Number.isInteger(count) || count < 1 || count > 10) return;
-          this.plugin.settings.configHistoryVersions = count;
-          await this.plugin.saveSettings();
-        });
-    });
     const history = this.plugin.getConfigHistory();
     const currentVersion = history[0]?.version;
     if (history.length === 0) {
       container.createEl("p", { text: "No saved config versions are available." });
+      this.renderSavedConfigVersions(container);
       this.renderDeleteConfig(container);
       return;
     }
@@ -547,19 +532,41 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
 
     if (!this.configRevealed) {
+      this.renderSavedConfigVersions(container);
       this.renderDeleteConfig(container);
       return;
     }
     const config = selectedBlock.config ?? this.plugin.getDecryptedConfig();
     if (!config) {
       container.createEl("p", { text: "Unlock Tephramesh to view the decrypted configuration." });
+      this.renderSavedConfigVersions(container);
       this.renderDeleteConfig(container);
       return;
     }
     container.createEl("h3", { text: selectedBlock ? `Decrypted config version ${selectedBlock.version}` : "Decrypted running config" });
     const pre = container.createEl("pre", { cls: "tephramesh-config-json" });
     pre.createEl("code").setText(JSON.stringify(config, null, 2));
+    this.renderSavedConfigVersions(container);
     this.renderDeleteConfig(container);
+  }
+
+  private renderSavedConfigVersions(container: HTMLElement): void {
+    new Setting(container)
+      .setName("Saved config versions")
+      .setDesc("Number of encrypted configuration versions to retain (1–10).")
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = "1";
+        text.inputEl.max = "10";
+        text.inputEl.step = "1";
+        text.setValue(String(this.plugin.settings.configHistoryVersions));
+        text.onChange(async (value) => {
+          const count = Number(value);
+          if (!Number.isInteger(count) || count < 1 || count > 10) return;
+          this.plugin.settings.configHistoryVersions = count;
+          await this.plugin.saveSettings();
+        });
+      });
   }
 
   private renderAuth(container: HTMLElement): void {
