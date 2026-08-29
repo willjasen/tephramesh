@@ -118,6 +118,18 @@
   font-weight: var(--font-normal);
 }
 
+.tephramesh-instance-name-link,
+.tephramesh-instance-name-link:visited {
+  color: var(--text-normal);
+  text-decoration: none;
+}
+
+.tephramesh-instance-name-link:hover,
+.tephramesh-instance-name-link:focus-visible {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
 .tephramesh-instance-os {
   display: none;
   font-family: var(--font-interface);

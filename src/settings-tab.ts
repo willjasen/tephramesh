@@ -938,7 +938,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
       });
       setting.nameEl.empty();
       setting.nameEl.prepend(dragHandle);
-      setting.nameEl.appendText(` ${instance.name}`);
+      const instanceLink = setting.nameEl.createEl("a", {
+        text: ` ${instance.name}`,
+        href: endpointUrl(instance.endpoint),
+        cls: "tephramesh-instance-name-link",
+      });
+      instanceLink.setAttribute("target", "_blank");
+      instanceLink.setAttribute("rel", "noopener noreferrer");
       const operatingSystem = setting.nameEl.createSpan({
         cls: "tephramesh-instance-os",
       });
@@ -959,15 +965,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
         version,
         this.plugin.runtimeStatuses.get(instance.id),
       );
-      const url = endpointUrl(instance.endpoint);
       setting.descEl.empty();
-      const link = setting.descEl.createEl("a", {
-        text: url,
-        href: url,
-        cls: "tephramesh-instance-url",
-      });
-      link.setAttribute("target", "_blank");
-      link.setAttribute("rel", "noopener noreferrer");
       setting.addDropdown((dropdown) => dropdown
         .addOption("random", "Random")
         .addOption("alphabetic", "Alphabetical")
