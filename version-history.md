@@ -9,6 +9,8 @@
  - allow deletion of a known instance
  - add configurable note sync host threshold
 
+ - add in config signing
+
  - have the test/build script automatically refresh the local plugin
  - fix display issues for the topology screen
  - fix for shard trust setting
