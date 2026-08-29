@@ -48,6 +48,8 @@ export interface SignedConfigEnvelope {
   rootKeyId: string;
   revision: number;
   enrollments: DeviceEnrollment[];
+  /** Keys removed from the active enrollment set; certificates remain in history. */
+  revokedEnrollmentKeyIds?: string[];
   history: ConfigHistoryEnvelope;
   signerKeyId: string;
   signature: string;
@@ -62,6 +64,8 @@ export interface LocalDeviceSigningRecord extends SigningKeyPairExport {
   pendingApproval?: DeviceEnrollmentApproval;
   lastAcceptedRevision?: number;
   lastAcceptedEnvelopeHash?: string;
+  lastAcceptedEnrollmentKeyIds?: string[];
+  lastAcceptedRevokedEnrollmentKeyIds?: string[];
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -351,11 +355,13 @@ export async function createSignedConfigEnvelope(
   rootKeyId: string,
   revision: number,
   signer: LocalDeviceSigningRecord,
+  revokedEnrollmentKeyIds: string[] = [],
 ): Promise<SignedConfigEnvelope> {
   if (!Number.isSafeInteger(revision) || revision < 1) {
     throw new Error("The signed configuration revision is invalid.");
   }
   await verifyEnrollmentChain(enrollments, rootKeyId);
+  assertEnrollmentMembership(enrollments, revokedEnrollmentKeyIds);
   await assertSigningKeyPair(signer);
   const signerEnrollment = enrollments.find(
     (enrollment) => enrollment.keyId === signer.keyId,
@@ -369,6 +375,7 @@ export async function createSignedConfigEnvelope(
     rootKeyId,
     revision,
     enrollments: structuredClone(enrollments),
+    revokedEnrollmentKeyIds: [...revokedEnrollmentKeyIds],
     history: structuredClone(history),
     signerKeyId: signer.keyId,
   };
@@ -382,6 +389,7 @@ export async function verifySignedConfigEnvelope(
     throw new Error("The signed Tephramesh configuration is invalid.");
   }
   await verifyEnrollmentChain(value.enrollments, value.rootKeyId);
+  assertEnrollmentMembership(value.enrollments, value.revokedEnrollmentKeyIds ?? []);
   const signer = value.enrollments.find(
     (enrollment) => enrollment.keyId === value.signerKeyId,
   );
@@ -393,6 +401,40 @@ export async function verifySignedConfigEnvelope(
     throw new Error("The Tephramesh configuration signature is invalid.");
   }
   return { envelope: structuredClone(value), hash: await sha256Canonical(value) };
+}
+
+function assertEnrollmentMembership(
+  enrollments: DeviceEnrollment[],
+  revokedEnrollmentKeyIds: string[],
+): void {
+  const active = new Set(enrollments.map((enrollment) => enrollment.keyId));
+  const revoked = new Set(revokedEnrollmentKeyIds);
+  if (revoked.size !== revokedEnrollmentKeyIds.length ||
+      revokedEnrollmentKeyIds.some((keyId) => !keyId || active.has(keyId))) {
+    throw new Error("The signed configuration enrollment membership is invalid.");
+  }
+}
+
+export function assertEnrollmentMembershipAccepted(
+  local: LocalDeviceSigningRecord,
+  enrollments: DeviceEnrollment[],
+  revokedEnrollmentKeyIds: string[] = [],
+): void {
+  assertEnrollmentMembership(enrollments, revokedEnrollmentKeyIds);
+  const previousActive = local.lastAcceptedEnrollmentKeyIds ?? [];
+  const previousRevoked = new Set(local.lastAcceptedRevokedEnrollmentKeyIds ?? []);
+  const active = new Set(enrollments.map((enrollment) => enrollment.keyId));
+  const revoked = new Set(revokedEnrollmentKeyIds);
+  for (const keyId of previousActive) {
+    if (!active.has(keyId) && !revoked.has(keyId)) {
+      throw new Error("The signed configuration omitted an enrolled installation without revoking it.");
+    }
+  }
+  for (const keyId of previousRevoked) {
+    if (!revoked.has(keyId)) {
+      throw new Error("A revoked enrollment was restored in the signed configuration.");
+    }
+  }
 }
 
 export function assertSignedRevisionAccepted(
@@ -418,6 +460,7 @@ export function isSignedConfigEnvelope(value: unknown): value is SignedConfigEnv
     Number.isSafeInteger(candidate.revision) &&
     (candidate.revision ?? 0) >= 1 &&
     Array.isArray(candidate.enrollments) &&
+    (candidate.revokedEnrollmentKeyIds === undefined || Array.isArray(candidate.revokedEnrollmentKeyIds)) &&
     !!candidate.history && typeof candidate.history === "object" &&
     typeof candidate.signerKeyId === "string" &&
     typeof candidate.signature === "string";

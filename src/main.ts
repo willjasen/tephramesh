@@ -45,6 +45,7 @@ import {
 } from "./config-history";
 import {
   approveEnrollmentRequest,
+  assertEnrollmentMembershipAccepted,
   assertSignedRevisionAccepted,
   createEnrollmentRequest,
   createEnrollmentApproval,
@@ -273,13 +274,15 @@ export default class TephrameshPlugin extends Plugin {
         pendingApproval: undefined,
         lastAcceptedRevision: nextSignedEnvelope.revision,
         lastAcceptedEnvelopeHash: nextSignedHash,
+        lastAcceptedEnrollmentKeyIds: nextSignedEnvelope.enrollments.map((enrollment) => enrollment.keyId),
+        lastAcceptedRevokedEnrollmentKeyIds: nextSignedEnvelope.revokedEnrollmentKeyIds ?? [],
       };
       this.setLocalSigningRecord(localSigning);
     }
   }
 
   async deleteConfig(): Promise<void> {
-    if (this.signingTrust !== "enrolled") {
+    if (this.signingTrust !== "enrolled" && !this.canDeleteConfigForRecovery()) {
       throw new Error("This installation must be enrolled for configuration signing before deleting config.");
     }
     const pluginDirectory =
@@ -445,19 +448,47 @@ export default class TephrameshPlugin extends Plugin {
     return "unsigned";
   }
 
+  canDeleteConfigForRecovery(): boolean {
+    if (!this.signingRootKeyId || this.signingTrust === "unsigned") return false;
+    if (this.getLocalSigningRecord()) return false;
+
+    // Keep the recovery affordance tied to an installation that was already
+    // identified by Keychain. A fresh unsigned installation has no binding and
+    // must not be able to erase a signed configuration merely because it can
+    // decrypt it.
+    const stored = this.app.secretStorage.getSecret(DEVICE_SIGNING_SECRET_NAME);
+    if (!stored) return false;
+    try {
+      const record = JSON.parse(stored) as Partial<LocalDeviceSigningRecord>;
+      return typeof record.bindingId === "string" &&
+        typeof record.deviceId === "string" &&
+        this.signingEnrollments.some((enrollment) =>
+          enrollment.bindingId === record.bindingId &&
+          enrollment.deviceId === record.deviceId,
+        );
+    } catch {
+      return false;
+    }
+  }
+
   getSigningInstallationOptions(): Array<{
     bindingId: string;
     deviceId: string;
     name: string;
     source: "mesh" | "known";
   }> {
+    const local = this.getLocalSigningRecord();
     return this.getAllSigningInstallationOptions().filter((installation) => {
       const enrolled = this.signingEnrollments.some(
         (enrollment) =>
           enrollment.bindingId === installation.bindingId ||
           enrollment.deviceId === installation.deviceId,
       );
-      return !enrolled;
+      // If the local Keychain record was lost, the signed enrollment is the
+      // only remaining way to identify this installation's binding. Allow a
+      // replacement request to be generated for an enrolled binding; another
+      // enrolled installation must still approve the new key.
+      return !enrolled || !local;
     });
   }
 
@@ -547,7 +578,7 @@ export default class TephrameshPlugin extends Plugin {
     const local = this.getLocalSigningRecord();
     if (!local?.rootKeyId) throw new Error("The local signing key is unavailable.");
     const request = decodeEnrollmentRequest(code);
-    const installation = this.requireSigningInstallation(request.bindingId);
+    const installation = this.requireConfiguredSigningInstallation(request.bindingId);
     if (installation.deviceId !== request.deviceId) {
       throw new Error("The enrollment request does not match that configured device.");
     }
@@ -579,7 +610,7 @@ export default class TephrameshPlugin extends Plugin {
       throw new Error("Only an enrolled installation can review enrollment requests.");
     }
     const request = decodeEnrollmentRequest(code);
-    const installation = this.requireSigningInstallation(request.bindingId);
+    const installation = this.requireConfiguredSigningInstallation(request.bindingId);
     if (installation.deviceId !== request.deviceId) {
       throw new Error("The enrollment request does not match that configured device.");
     }
@@ -757,6 +788,11 @@ export default class TephrameshPlugin extends Plugin {
             verified.envelope.revision,
             verified.hash,
           );
+          assertEnrollmentMembershipAccepted(
+            local,
+            verified.envelope.enrollments,
+            verified.envelope.revokedEnrollmentKeyIds ?? [],
+          );
           const enrollment = verified.envelope.enrollments.find(
             (candidate) => candidate.keyId === local.keyId,
           );
@@ -782,6 +818,8 @@ export default class TephrameshPlugin extends Plugin {
             ...local,
             lastAcceptedRevision: verified.envelope.revision,
             lastAcceptedEnvelopeHash: verified.hash,
+            lastAcceptedEnrollmentKeyIds: verified.envelope.enrollments.map((candidate) => candidate.keyId),
+            lastAcceptedRevokedEnrollmentKeyIds: verified.envelope.revokedEnrollmentKeyIds ?? [],
           };
         } else {
           this.signingTrust = "approval-required";
@@ -914,6 +952,21 @@ export default class TephrameshPlugin extends Plugin {
     );
     if (!installation) {
       throw new Error("Select a configured device or Known device.");
+    }
+    return installation;
+  }
+
+  private requireConfiguredSigningInstallation(bindingId: string): {
+    bindingId: string;
+    deviceId: string;
+    name: string;
+    source: "mesh" | "known";
+  } {
+    const installation = this.getAllSigningInstallationOptions().find(
+      (candidate) => candidate.bindingId === bindingId,
+    );
+    if (!installation) {
+      throw new Error("That device is no longer configured for Tephramesh.");
     }
     return installation;
   }

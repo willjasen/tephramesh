@@ -9,6 +9,7 @@ import {
 import { emptySecrets } from "../src/secret-bundle";
 import {
   approveEnrollmentRequest,
+  assertEnrollmentMembershipAccepted,
   assertSignedRevisionAccepted,
   canonicalJson,
   createEnrollmentRequest,
@@ -264,5 +265,34 @@ describe("configuration signing", () => {
       .toThrow(/rolled-back/i);
     expect(() => assertSignedRevisionAccepted(anchored, 8, "other-branch"))
       .toThrow(/conflicting/i);
+  });
+
+  it("requires membership continuity and preserves revocations", async () => {
+    const { enrollment, local } = await genesis();
+    const otherKeys = await generateSigningKeyPair();
+    const other = await approveEnrollmentRequest(
+      createEnrollmentRequest("instance-b", "device-b", otherKeys), local,
+    );
+    const anchored = {
+      ...local,
+      lastAcceptedEnrollmentKeyIds: [enrollment.keyId, other.keyId],
+      lastAcceptedRevokedEnrollmentKeyIds: [],
+    };
+    expect(() => assertEnrollmentMembershipAccepted(anchored, [enrollment]))
+      .toThrow(/omitted/i);
+    expect(() => assertEnrollmentMembershipAccepted(
+      anchored, [enrollment], [other.keyId],
+    )).not.toThrow();
+    expect(() => assertEnrollmentMembershipAccepted(
+      { ...anchored, lastAcceptedEnrollmentKeyIds: [enrollment.keyId], lastAcceptedRevokedEnrollmentKeyIds: [other.keyId] },
+      [enrollment], [],
+    )).toThrow(/revoked/i);
+  });
+
+  it("rejects a revoked signer when creating an envelope", async () => {
+    const { enrollment, local } = await genesis();
+    await expect(createSignedConfigEnvelope(
+      await history(), [enrollment], local.keyId, 1, local, [local.keyId],
+    )).rejects.toThrow(/membership/i);
   });
 });

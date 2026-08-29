@@ -591,7 +591,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
       this.signingSelectedInstanceId = enrollmentSelectedId;
       new Setting(container)
         .setName("This installation")
-        .setDesc("Choose the configured Syncthing device represented by this Obsidian installation.")
+        .setDesc(status.pendingRequestCode
+          ? "Generate a replacement signing key for this configured installation, then have an enrolled installation approve it."
+          : "Choose the configured Syncthing device represented by this Obsidian installation.")
         .addDropdown((dropdown) => {
           for (const installation of eligibleInstallations) {
             dropdown.addOption(
@@ -868,10 +870,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderDeleteConfig(container: HTMLElement): void {
-    if (this.plugin.getSigningEnvironmentStatus().state !== "enrolled") return;
+    const signingStatus = this.plugin.getSigningEnvironmentStatus();
+    if (signingStatus.state !== "enrolled" && !this.plugin.canDeleteConfigForRecovery()) return;
     new Setting(container)
       .setName("Delete Config")
-      .setDesc("Erase Tephramesh's encrypted plugin data for this vault.")
+      .setDesc(this.plugin.canDeleteConfigForRecovery()
+        ? "Reset Tephramesh after all configuration-signing keys were lost."
+        : "Erase Tephramesh's encrypted plugin data for this vault.")
       .addButton((button) =>
         button.setButtonText("Delete Config").setWarning().onClick(() => {
           new DeleteConfigModal(this.app, async () => {
