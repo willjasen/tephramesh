@@ -36,6 +36,12 @@ import { operatingSystemPresentation } from "./platform";
 import { RestoreConfigVersionModal } from "./restore-config-version-modal";
 import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
 
+function formatFolderUpdatedAt(stateChanged: string | undefined): string {
+  if (!stateChanged) return "unknown";
+  const date = new Date(stateChanged);
+  return Number.isNaN(date.getTime()) ? stateChanged : date.toLocaleString();
+}
+
 type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology";
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
@@ -264,6 +270,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
       if (section.id === "topology") {
         this.topologyTabIndicator = button.createSpan({
           cls: "tephramesh-topology-indicator tephramesh-tab-indicator",
+        });
+      } else if (section.id === "auth" && this.plugin.getSigningEnvironmentStatus().state !== "enrolled") {
+        button.createSpan({
+          cls: "tephramesh-topology-indicator tephramesh-tab-indicator is-warning",
         });
       }
       button.createSpan({ text: section.label });
@@ -560,9 +570,53 @@ export class TephrameshSettingTab extends PluginSettingTab {
 
     if (status.state === "approval-required") {
       container.createEl("p", {
-        text: "This signed configuration is readable, but this Obsidian installation cannot change it until an already enrolled installation approves its signing key.",
+        text: "This signed configuration is readable, but this tephramesh device cannot change it until an already enrolled installation approves its signing key.",
         cls: "tephramesh-config-warning",
       });
+      const eligibleInstallations = signingInstallations;
+      const enrollmentSelectedId = eligibleInstallations.some(
+        (installation) => installation.bindingId === this.signingSelectedInstanceId,
+      )
+        ? this.signingSelectedInstanceId!
+        : eligibleInstallations[0]?.bindingId ?? "";
+      this.signingSelectedInstanceId = enrollmentSelectedId;
+      new Setting(container)
+        .setName("This installation")
+        .setDesc("Choose the configured Syncthing device represented by this Obsidian installation.")
+        .addDropdown((dropdown) => {
+          for (const installation of eligibleInstallations) {
+            dropdown.addOption(
+              installation.bindingId,
+              `${installation.name} · ${shortDeviceId(installation.deviceId)}${installation.source === "known" ? " · Known" : ""}`,
+            );
+          }
+          dropdown.setValue(enrollmentSelectedId).onChange((value) => {
+            this.signingSelectedInstanceId = value;
+          });
+        })
+        .addButton((button) => button
+          .setButtonText(status.pendingRequestCode ? "Regenerate request" : "Generate request")
+          .setDisabled(!enrollmentSelectedId)
+          .onClick(async () => {
+            try {
+              const code = await this.plugin.generateEnrollmentRequest(
+                this.signingSelectedInstanceId ?? enrollmentSelectedId,
+              );
+              await navigator.clipboard.writeText(code);
+              this.render();
+              showTephrameshNotice(
+                "success",
+                "Enrollment request copied",
+                "Paste it into an enrolled installation's Approve request field.",
+              );
+            } catch (error) {
+              showTephrameshNotice(
+                "error",
+                "Request generation failed",
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+          }));
       container.createEl("h3", { text: "Already enrolled installations" });
       container.createEl("p", {
         text: "Send the enrollment request to one of these installations for approval.",
@@ -617,50 +671,6 @@ export class TephrameshSettingTab extends PluginSettingTab {
           });
         }
       }
-      const eligibleInstallations = signingInstallations;
-      const enrollmentSelectedId = eligibleInstallations.some(
-        (installation) => installation.bindingId === this.signingSelectedInstanceId,
-      )
-        ? this.signingSelectedInstanceId!
-        : eligibleInstallations[0]?.bindingId ?? "";
-      this.signingSelectedInstanceId = enrollmentSelectedId;
-      new Setting(container)
-        .setName("This installation")
-        .setDesc("Choose the configured Syncthing device represented by this Obsidian installation.")
-        .addDropdown((dropdown) => {
-          for (const installation of eligibleInstallations) {
-            dropdown.addOption(
-              installation.bindingId,
-              `${installation.name} · ${shortDeviceId(installation.deviceId)}${installation.source === "known" ? " · Known" : ""}`,
-            );
-          }
-          dropdown.setValue(enrollmentSelectedId).onChange((value) => {
-            this.signingSelectedInstanceId = value;
-          });
-        })
-        .addButton((button) => button
-          .setButtonText(status.pendingRequestCode ? "Regenerate request" : "Generate request")
-          .setDisabled(!enrollmentSelectedId)
-          .onClick(async () => {
-            try {
-              const code = await this.plugin.generateEnrollmentRequest(
-                this.signingSelectedInstanceId ?? enrollmentSelectedId,
-              );
-              await navigator.clipboard.writeText(code);
-              this.render();
-              showTephrameshNotice(
-                "success",
-                "Enrollment request copied",
-                "Paste it into an enrolled installation's Approve request field.",
-              );
-            } catch (error) {
-              showTephrameshNotice(
-                "error",
-                "Request generation failed",
-                error instanceof Error ? error.message : String(error),
-              );
-            }
-          }));
       if (status.pendingRequestCode) {
         new Setting(container)
           .setName("Enrollment request")
@@ -849,6 +859,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderDeleteConfig(container: HTMLElement): void {
+    if (this.plugin.getSigningEnvironmentStatus().state !== "enrolled") return;
     new Setting(container)
       .setName("Delete Config")
       .setDesc("Erase Tephramesh's encrypted plugin data for this vault.")
@@ -1467,10 +1478,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
     }
     const folder = status.folder;
     const pending = folder.needFiles ?? 0;
+    const updated = `updated ${formatFolderUpdatedAt(folder.stateChanged)}`;
     if (status.folderPaused) {
       element.addClass("is-paused");
       element.createDiv({
-        text: `paused · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,
+        text: `paused · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending · ${updated}`,
       });
       this.renderPendingFiles(element, status.pendingFiles);
       return;
@@ -1479,7 +1491,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       element.addClass("is-scanning");
       const progress = folder.scanProgress;
       element.createDiv({
-        text: `scanning · ${progress === undefined ? "calculating…" : `${progress}%`} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files`,
+        text: `scanning · ${progress === undefined ? "calculating…" : `${progress}%`} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${updated}`,
       });
       this.renderPendingFiles(element, status.pendingFiles);
       return;
@@ -1490,13 +1502,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
     if (folder.state === "syncing") {
       const progress = syncProgress(folder);
       element.createDiv({
-        text: `syncing · ${progress === undefined ? "calculating…" : `${progress}%`} · ↓ ${formatTransferRate(status.downloadBytesPerSecond)} · ↑ ${formatTransferRate(status.uploadBytesPerSecond)} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,
+        text: `syncing · ${progress === undefined ? "calculating…" : `${progress}%`} · ↓ ${formatTransferRate(status.downloadBytesPerSecond)} · ↑ ${formatTransferRate(status.uploadBytesPerSecond)} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending · ${updated}`,
       });
       this.renderPendingFiles(element, status.pendingFiles);
       return;
     }
     element.createDiv({
-      text: `${folder.state} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending`,
+      text: `${folder.state} · ${folder.localFiles ?? 0}/${folder.globalFiles ?? 0} files · ${pending} pending · ${updated}`,
     });
     this.renderPendingFiles(element, status.pendingFiles);
   }

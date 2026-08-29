@@ -2,13 +2,14 @@
 
 ## 0.3.0 (beta)
 
- - show the global folder size
+ - show the global folder size under the topology screen
+ - show the folder's time for each instance on the instances screen
  - show a logo of the operating system for each syncthing instance
  - allow reording of syncthing hosts under the "Instances" tab
  - allow deletion of a known instance
  - add configurable note sync host threshold
 
-- have the test/build script automatically refresh the local plugin
+ - have the test/build script automatically refresh the local plugin
  - fix display issues for the topology screen
  - fix for shard trust setting
 

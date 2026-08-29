@@ -279,6 +279,9 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   async deleteConfig(): Promise<void> {
+    if (this.signingTrust !== "enrolled") {
+      throw new Error("This installation must be enrolled for configuration signing before deleting config.");
+    }
     const pluginDirectory =
       this.manifest.dir ??
       `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
