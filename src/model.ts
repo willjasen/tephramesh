@@ -183,3 +183,16 @@ export const DEFAULT_SETTINGS: TephrameshSettings = {
   instances: [],
   knownDevices: [],
 };
+
+export function coherentOfflineTimeoutSeconds(
+  offlineTimeoutSeconds: number,
+  pollIntervalSeconds: number,
+): number {
+  const offline = Number.isFinite(offlineTimeoutSeconds)
+    ? Math.max(1, Math.floor(offlineTimeoutSeconds))
+    : DEFAULT_SETTINGS.offlineTimeoutSeconds;
+  const polling = Number.isFinite(pollIntervalSeconds)
+    ? Math.max(1, Math.floor(pollIntervalSeconds))
+    : DEFAULT_SETTINGS.pollIntervalSeconds;
+  return Math.max(offline, polling);
+}

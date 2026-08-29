@@ -1,5 +1,5 @@
 import { normalizePath, Plugin, setIcon } from "obsidian";
-import { DEFAULT_SETTINGS, normalizeInstanceDisplayOrder, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings, type KnownDevice } from "./model";
+import { coherentOfflineTimeoutSeconds, DEFAULT_SETTINGS, normalizeInstanceDisplayOrder, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings, type KnownDevice } from "./model";
 import { TephrameshSettingTab } from "./settings-tab";
 import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
 import { showTephrameshNotice } from "./notices";
@@ -47,6 +47,7 @@ import {
   approveEnrollmentRequest,
   assertEnrollmentMembershipAccepted,
   assertSignedRevisionAccepted,
+  createConfigAcceptanceAcknowledgement,
   createEnrollmentRequest,
   createEnrollmentApproval,
   createGenesisEnrollment,
@@ -60,8 +61,10 @@ import {
   SignedConfigConflictError,
   sha256Canonical,
   verifyEnrollmentApproval,
+  verifyConfigAcceptanceAcknowledgement,
   verifySignedConfigEnvelope,
   type DeviceEnrollment,
+  type ConfigAcceptanceAcknowledgement,
   type LocalDeviceSigningRecord,
 } from "./config-signing";
 import { createConfigJournalRecord, isConfigJournalRecord, type ConfigJournalRecord } from "./config-journal";
@@ -89,6 +92,7 @@ interface LegacyShardEncryptionKeyHash {
 }
 
 export default class TephrameshPlugin extends Plugin {
+  private static readonly CONFIG_SYNC_SUBPATH = ".obsidian/plugins/tephramesh";
   settings: TephrameshSettings = structuredClone(DEFAULT_SETTINGS);
   runtimeStatuses = new Map<string, InstanceRuntimeStatus>();
   reconciliationReport: ReconciliationReport = {
@@ -109,6 +113,11 @@ export default class TephrameshPlugin extends Plugin {
   private storageFormat: 2 | 3 = 3;
   private saveQueue: Promise<void> = Promise.resolve();
   private configJournalRecords: ConfigJournalRecord[] = [];
+  private acceptedConfigKeyIds = new Set<string>();
+  private acknowledgementRefreshInProgress = false;
+  private lastAcknowledgementRefreshAt = 0;
+  private configSubpathScans = new Map<string, Promise<void>>();
+  private remoteConfigSubpathScanTimer?: number;
   private settingTab!: TephrameshSettingTab;
   private pollingTimer?: number;
   private statusPollingEnabled = false;
@@ -133,6 +142,7 @@ export default class TephrameshPlugin extends Plugin {
   private static readonly INSTANCE_METADATA_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
   private static readonly RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
   private static readonly LABEL_SYNC_DEBOUNCE_MS = 750;
+  private static readonly REMOTE_CONFIG_SCAN_DELAY_MS = 3_000;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -160,12 +170,16 @@ export default class TephrameshPlugin extends Plugin {
     if (this.folderLabelSyncTimer !== undefined) {
       window.clearTimeout(this.folderLabelSyncTimer);
     }
+    if (this.remoteConfigSubpathScanTimer !== undefined) {
+      window.clearTimeout(this.remoteConfigSubpathScanTimer);
+    }
   }
 
   async onExternalSettingsChange(): Promise<void> {
     this.secrets = undefined;
     await this.loadSettings();
     await this.tryUnlockStoredIdentity();
+    this.restartPolling();
     this.restartNoteSyncPolling();
     this.settingTab.rerenderIfVisible();
     if (this.statusPollingEnabled) void this.refreshStatuses(true);
@@ -204,6 +218,10 @@ export default class TephrameshPlugin extends Plugin {
       instances: normalizeInstanceDisplayOrder(legacySettings.instances),
       schemaVersion: 3,
     };
+    this.settings.offlineTimeoutSeconds = coherentOfflineTimeoutSeconds(
+      this.settings.offlineTimeoutSeconds,
+      this.settings.pollIntervalSeconds,
+    );
     this.encryptedData =
       legacy && "encryptedSecrets" in legacy
         ? legacy.encryptedSecrets ?? ""
@@ -317,12 +335,66 @@ export default class TephrameshPlugin extends Plugin {
         lastAcceptedRevokedEnrollmentKeyIds: nextSignedEnvelope.revokedEnrollmentKeyIds ?? [],
       };
       this.setLocalSigningRecord(localSigning);
+      try {
+        await this.writeCurrentConfigAcknowledgement(localSigning);
+      } catch {
+        this.acceptedConfigKeyIds.delete(localSigning.keyId);
+      }
     }
+    this.requestConfigSubpathScans();
+  }
+
+  private requestConfigSubpathScans(): void {
+    if (!this.secrets || !this.settings.folderId) return;
+    const devices = activeMeshInstances(this.settings.instances).filter(
+      (instance) => instance.kind === "device",
+    );
+    const local = this.getLocalSigningRecord();
+    const localDevice = devices.find((instance) =>
+      instance.deviceId === local?.deviceId || local?.bindingId === `mesh:${instance.id}`
+    );
+    if (localDevice) this.requestConfigSubpathScansFor([localDevice]);
+    const remoteDevices = devices.filter((instance) => instance.id !== localDevice?.id);
+    if (this.remoteConfigSubpathScanTimer !== undefined) {
+      window.clearTimeout(this.remoteConfigSubpathScanTimer);
+    }
+    if (remoteDevices.length === 0) {
+      this.remoteConfigSubpathScanTimer = undefined;
+      return;
+    }
+    this.remoteConfigSubpathScanTimer = window.setTimeout(() => {
+      this.remoteConfigSubpathScanTimer = undefined;
+      this.requestConfigSubpathScansFor(remoteDevices);
+    }, TephrameshPlugin.REMOTE_CONFIG_SCAN_DELAY_MS);
+  }
+
+  private requestConfigSubpathScansFor(devices: MeshInstance[]): void {
+    void Promise.allSettled(devices.map(async (instance) => {
+      const existing = this.configSubpathScans.get(instance.id);
+      if (existing) return existing;
+      const apiKey = this.getApiKey(instance.id);
+      if (!apiKey) return;
+      const client = new SyncthingClient(instance.endpoint, apiKey);
+      const scan = client.scanFolderSubpath(
+        this.settings.folderId,
+        TephrameshPlugin.CONFIG_SYNC_SUBPATH,
+      ).finally(() => {
+        if (this.configSubpathScans.get(instance.id) === scan) {
+          this.configSubpathScans.delete(instance.id);
+        }
+      });
+      this.configSubpathScans.set(instance.id, scan);
+      await scan;
+    }));
   }
 
   async deleteConfig(): Promise<void> {
     if (this.signingTrust !== "enrolled" && !this.canDeleteConfigForRecovery()) {
       throw new Error("This installation must be enrolled for configuration signing before deleting config.");
+    }
+    if (this.remoteConfigSubpathScanTimer !== undefined) {
+      window.clearTimeout(this.remoteConfigSubpathScanTimer);
+      this.remoteConfigSubpathScanTimer = undefined;
     }
     const pluginDirectory =
       this.manifest.dir ??
@@ -336,6 +408,10 @@ export default class TephrameshPlugin extends Plugin {
       const listing = await this.app.vault.adapter.list(journalDirectory);
       for (const path of listing.files) await this.app.vault.adapter.remove(path);
       await this.app.vault.adapter.rmdir(journalDirectory, false);
+    }
+    const acknowledgementRoot = this.configAcknowledgementRoot();
+    if (await this.app.vault.adapter.exists(acknowledgementRoot)) {
+      await this.app.vault.adapter.rmdir(acknowledgementRoot, true);
     }
 
     this.settings = structuredClone(DEFAULT_SETTINGS);
@@ -399,6 +475,8 @@ export default class TephrameshPlugin extends Plugin {
     state: "unsigned" | "approval-required" | "enrolled";
     rootKeyId: string;
     revision: number;
+    acceptedCount: number;
+    enrolledCount: number;
     localInstallationName?: string;
     pendingRequestCode?: string;
     pendingInstallation?: {
@@ -418,6 +496,7 @@ export default class TephrameshPlugin extends Plugin {
       createdAt: string;
       approvedByName?: string;
       isEnrollmentRoot: boolean;
+      acceptedCurrentConfig: boolean;
     }>;
   } {
     const local = this.getLocalSigningRecord();
@@ -432,6 +511,10 @@ export default class TephrameshPlugin extends Plugin {
       state: this.signingTrust,
       rootKeyId: this.signingRootKeyId,
       revision: this.signedConfigRevision,
+      acceptedCount: this.signingEnrollments.filter((enrollment) =>
+        this.acceptedConfigKeyIds.has(enrollment.keyId)
+      ).length,
+      enrolledCount: this.signingEnrollments.length,
       localInstallationName: local
         ? this.getAllSigningInstallationOptions().find(
             (option) => option.bindingId === local.bindingId,
@@ -479,6 +562,7 @@ export default class TephrameshPlugin extends Plugin {
           createdAt: enrollment.createdAt,
           approvedByName: approverInstallation?.name,
           isEnrollmentRoot: enrollment.keyId === this.signingRootKeyId,
+          acceptedCurrentConfig: this.acceptedConfigKeyIds.has(enrollment.keyId),
         };
       }),
     };
@@ -563,6 +647,90 @@ export default class TephrameshPlugin extends Plugin {
       } catch { /* Ignore incomplete or unrelated journal files. */ }
     }
     this.configJournalRecords.sort((a, b) => a.revision - b.revision || a.createdAt.localeCompare(b.createdAt));
+  }
+
+  private configAcknowledgementRoot(): string {
+    const pluginDirectory = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    return normalizePath(`${pluginDirectory}/config-acks`);
+  }
+
+  private currentConfigAcknowledgementDirectory(): string {
+    return normalizePath(
+      `${this.configAcknowledgementRoot()}/${this.signedConfigRevision}-${this.signedConfigHash}`,
+    );
+  }
+
+  private async writeCurrentConfigAcknowledgement(local: LocalDeviceSigningRecord): Promise<void> {
+    if (!this.signingRootKeyId || !this.signedConfigRevision || !this.signedConfigHash) return;
+    const root = this.configAcknowledgementRoot();
+    if (!(await this.app.vault.adapter.exists(root))) await this.app.vault.adapter.mkdir(root);
+    const directory = this.currentConfigAcknowledgementDirectory();
+    if (!(await this.app.vault.adapter.exists(directory))) await this.app.vault.adapter.mkdir(directory);
+    const acknowledgement = await createConfigAcceptanceAcknowledgement(
+      this.signingRootKeyId,
+      this.signedConfigRevision,
+      this.signedConfigHash,
+      local,
+    );
+    await this.app.vault.adapter.write(
+      normalizePath(`${directory}/${local.keyId}.json`),
+      JSON.stringify(acknowledgement),
+    );
+    this.acceptedConfigKeyIds.add(local.keyId);
+  }
+
+  private async refreshCurrentConfigAcknowledgements(force = false): Promise<boolean> {
+    if (!this.signingRootKeyId || !this.signedConfigRevision || !this.signedConfigHash ||
+        this.acknowledgementRefreshInProgress) return false;
+    const now = Date.now();
+    if (!force && now - this.lastAcknowledgementRefreshAt < 5_000) return false;
+    this.acknowledgementRefreshInProgress = true;
+    this.lastAcknowledgementRefreshAt = now;
+    try {
+      const previous = [...this.acceptedConfigKeyIds].sort().join("|");
+      const accepted = new Set<string>();
+      const directory = this.currentConfigAcknowledgementDirectory();
+      if (await this.app.vault.adapter.exists(directory)) {
+        const listing = await this.app.vault.adapter.list(directory);
+        for (const path of listing.files) {
+          if (!path.endsWith(".json")) continue;
+          try {
+            const value: unknown = JSON.parse(await this.app.vault.adapter.read(path));
+            const acknowledgement = await verifyConfigAcceptanceAcknowledgement(
+              value,
+              this.signingRootKeyId,
+              this.signedConfigRevision,
+              this.signedConfigHash,
+              this.signingEnrollments,
+              this.signingRevokedEnrollmentKeyIds,
+            );
+            accepted.add(acknowledgement.signerKeyId);
+          } catch { /* Ignore malformed, stale, revoked, or forged acknowledgements. */ }
+        }
+      }
+      const local = this.getLocalSigningRecord();
+      if (local?.rootKeyId === this.signingRootKeyId &&
+          local.lastAcceptedRevision === this.signedConfigRevision &&
+          local.lastAcceptedEnvelopeHash === this.signedConfigHash &&
+          this.signingEnrollments.some((enrollment) => enrollment.keyId === local.keyId) &&
+          !this.signingRevokedEnrollmentKeyIds.includes(local.keyId) &&
+          !accepted.has(local.keyId)) {
+        try {
+          await this.writeCurrentConfigAcknowledgement(local);
+          accepted.add(local.keyId);
+          this.requestConfigSubpathScans();
+        } catch { /* Keep this installation waiting and retry on the next refresh. */ }
+      }
+      this.acceptedConfigKeyIds = accepted;
+      return previous !== [...accepted].sort().join("|");
+    } finally {
+      this.acknowledgementRefreshInProgress = false;
+    }
+  }
+
+  async refreshConfigAcceptanceStatus(): Promise<void> {
+    await this.refreshCurrentConfigAcknowledgements(true);
+    this.settingTab.rerenderIfVisible();
   }
 
   private getAllSigningInstallationOptions(): Array<{
@@ -884,11 +1052,11 @@ export default class TephrameshPlugin extends Plugin {
         const local = this.getLocalSigningRecord();
         let enrolledLocal: LocalDeviceSigningRecord | undefined;
         let completePendingApproval = false;
+        let conflictingRevision = false;
         if (local?.rootKeyId) {
           if (local.rootKeyId !== verified.envelope.rootKeyId) {
             throw new Error("The signed configuration uses a different enrollment root.");
           }
-          let conflictingRevision = false;
           try {
             assertSignedRevisionAccepted(
               local,
@@ -960,7 +1128,15 @@ export default class TephrameshPlugin extends Plugin {
         if (enrolledLocal) this.setLocalSigningRecord(enrolledLocal);
         if (completePendingApproval || (repairedHistory && enrolledLocal)) {
           await this.saveSettings();
+        } else if (enrolledLocal && !conflictingRevision) {
+          try {
+            await this.writeCurrentConfigAcknowledgement(enrolledLocal);
+            this.requestConfigSubpathScans();
+          } catch {
+            this.acceptedConfigKeyIds.delete(enrolledLocal.keyId);
+          }
         }
+        await this.refreshCurrentConfigAcknowledgements(true);
         return;
       }
       if (isConfigHistoryEnvelope(decrypted)) {
@@ -1041,6 +1217,8 @@ export default class TephrameshPlugin extends Plugin {
     this.signedConfigRevision = 0;
     this.signedConfigHash = "";
     this.signedConfigConflict = undefined;
+    this.acceptedConfigKeyIds.clear();
+    this.lastAcknowledgementRefreshAt = 0;
     this.signingTrust = "unsigned";
   }
 
@@ -1112,6 +1290,10 @@ export default class TephrameshPlugin extends Plugin {
       instances: normalizeInstanceDisplayOrder(protectedCopy.settings.instances),
       schemaVersion: 3,
     };
+    this.settings.offlineTimeoutSeconds = coherentOfflineTimeoutSeconds(
+      this.settings.offlineTimeoutSeconds,
+      this.settings.pollIntervalSeconds,
+    );
     if (!Object.prototype.hasOwnProperty.call(protectedCopy.settings, "noteSyncRequiredHosts")) {
       this.settings.noteSyncRequiredHosts = Math.max(
         1,
@@ -1980,6 +2162,9 @@ export default class TephrameshPlugin extends Plugin {
       }
     } finally {
       this.refreshInProgress = false;
+      if (await this.refreshCurrentConfigAcknowledgements()) {
+        this.settingTab.rerenderIfVisible();
+      }
       this.settingTab.refreshRuntimeStatuses(this.runtimeStatuses);
       const availabilityAfter = activeMeshInstances(this.settings.instances)
         .map((instance) => `${instance.id}:${isRuntimeStatusFresh(

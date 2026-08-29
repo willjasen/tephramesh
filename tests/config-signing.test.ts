@@ -12,6 +12,7 @@ import {
   assertEnrollmentMembershipAccepted,
   assertSignedRevisionAccepted,
   canonicalJson,
+  createConfigAcceptanceAcknowledgement,
   createEnrollmentRequest,
   createEnrollmentApproval,
   createGenesisEnrollment,
@@ -23,6 +24,7 @@ import {
   sha256Canonical,
   verifyEnrollmentApproval,
   verifyEnrollmentChain,
+  verifyConfigAcceptanceAcknowledgement,
   verifySignedConfigEnvelope,
   type LocalDeviceSigningRecord,
 } from "../src/config-signing";
@@ -81,6 +83,48 @@ describe("configuration signing", () => {
     const tampered = structuredClone(envelope);
     tampered.history.retention = 1;
     await expect(verifySignedConfigEnvelope(tampered)).rejects.toThrow(/signature/i);
+  });
+
+  it("signs and verifies acceptance of one exact configuration envelope", async () => {
+    const { enrollment, local } = await genesis();
+    const acknowledgement = await createConfigAcceptanceAcknowledgement(
+      local.keyId,
+      7,
+      "a".repeat(64),
+      local,
+    );
+    await expect(verifyConfigAcceptanceAcknowledgement(
+      acknowledgement,
+      local.keyId,
+      7,
+      "a".repeat(64),
+      [enrollment],
+      [],
+    )).resolves.toMatchObject({ signerKeyId: local.keyId, revision: 7 });
+    await expect(verifyConfigAcceptanceAcknowledgement(
+      acknowledgement,
+      local.keyId,
+      8,
+      "b".repeat(64),
+      [enrollment],
+      [],
+    )).rejects.toThrow(/does not match/i);
+    await expect(verifyConfigAcceptanceAcknowledgement(
+      acknowledgement,
+      local.keyId,
+      7,
+      "a".repeat(64),
+      [enrollment],
+      [local.keyId],
+    )).rejects.toThrow(/signature/i);
+    await expect(verifyConfigAcceptanceAcknowledgement(
+      { ...acknowledgement, acceptedAt: new Date(0).toISOString() },
+      local.keyId,
+      7,
+      "a".repeat(64),
+      [enrollment],
+      [],
+    )).rejects.toThrow(/signature/i);
   });
 
   it("repairs an authenticated history affected by snapshot aliasing", async () => {

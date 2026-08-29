@@ -6,7 +6,7 @@ import {
   setIcon,
 } from "obsidian";
 import type TephrameshPlugin from "./main";
-import type { InstanceKind, InstanceRuntimeStatus, MeshInstance } from "./model";
+import { coherentOfflineTimeoutSeconds, type InstanceKind, type InstanceRuntimeStatus, type MeshInstance } from "./model";
 import {
   endpointUrl,
   shortDeviceId,
@@ -311,10 +311,21 @@ export class TephrameshSettingTab extends PluginSettingTab {
         this.topologyTabIndicator = button.createSpan({
           cls: "tephramesh-topology-indicator tephramesh-tab-indicator",
         });
-      } else if (section.id === "auth" && this.plugin.getSigningEnvironmentStatus().state !== "enrolled") {
-        button.createSpan({
-          cls: "tephramesh-topology-indicator tephramesh-tab-indicator is-warning",
+      } else if (section.id === "auth") {
+        const signingStatus = this.plugin.getSigningEnvironmentStatus();
+        const allAccepted = signingStatus.state === "enrolled" &&
+          signingStatus.enrolledCount > 0 &&
+          signingStatus.acceptedCount === signingStatus.enrolledCount;
+        const indicator = button.createSpan({
+          cls: `tephramesh-topology-indicator tephramesh-tab-indicator${allAccepted ? "" : " is-warning"}`,
         });
+        const acceptanceLabel = signingStatus.state !== "enrolled"
+          ? "This installation is not enrolled for configuration signing"
+          : allAccepted
+            ? `All ${signingStatus.enrolledCount} enrolled installations accepted signed revision ${signingStatus.revision}`
+            : `${signingStatus.acceptedCount} of ${signingStatus.enrolledCount} enrolled installations accepted signed revision ${signingStatus.revision}`;
+        indicator.setAttribute("title", acceptanceLabel);
+        button.setAttribute("aria-label", `Signing. ${acceptanceLabel}`);
       }
       button.createSpan({ text: section.label });
       button.setAttribute("role", "tab");
@@ -398,9 +409,14 @@ export class TephrameshSettingTab extends PluginSettingTab {
           .setValue(String(this.plugin.settings.pollIntervalSeconds))
           .onChange(async (value) => {
             this.plugin.settings.pollIntervalSeconds = Number(value);
+            this.plugin.settings.offlineTimeoutSeconds = coherentOfflineTimeoutSeconds(
+              this.plugin.settings.offlineTimeoutSeconds,
+              this.plugin.settings.pollIntervalSeconds,
+            );
             await this.plugin.saveSettings();
             this.plugin.restartPolling();
             await this.plugin.refreshStatuses(true);
+            this.render();
           }),
       );
     new Setting(container)
@@ -415,9 +431,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
           .addOption("60", "1 minute")
           .setValue(String(this.plugin.settings.offlineTimeoutSeconds))
           .onChange(async (value) => {
-            this.plugin.settings.offlineTimeoutSeconds = Number(value);
+            this.plugin.settings.offlineTimeoutSeconds = coherentOfflineTimeoutSeconds(
+              Number(value),
+              this.plugin.settings.pollIntervalSeconds,
+            );
             await this.plugin.saveSettings();
             await this.plugin.refreshStatuses(true);
+            this.render();
           }),
       );
     new Setting(container)
@@ -687,9 +707,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
       }
       for (const installation of status.authenticatedInstallations) {
         const sourceLabel = installation.source === "mesh"
-          ? "Active device"
+          ? "Device"
           : installation.source === "known"
-            ? "Known device"
+            ? "Known"
             : "No longer configured";
         const enrolledSetting = new Setting(enrolledList)
           .setName(installation.name)
@@ -762,6 +782,22 @@ export class TephrameshSettingTab extends PluginSettingTab {
       text: `Enrolled as ${status.localInstallationName ?? "this installation"}`,
       cls: "tephramesh-enrolled-status",
     });
+    new Setting(container)
+      .setName(`Accepted by ${status.acceptedCount} of ${status.enrolledCount}`)
+      .setDesc(`Signed configuration revision ${status.revision}. Each count is backed by a verified acknowledgement from that enrolled installation.`)
+      .addButton((button) => button.setButtonText("Refresh").onClick(async () => {
+        button.setDisabled(true).setButtonText("Refreshing…");
+        try {
+          await this.plugin.refreshConfigAcceptanceStatus();
+        } catch (error) {
+          showTephrameshNotice(
+            "error",
+            "Acceptance refresh failed",
+            error instanceof Error ? error.message : String(error),
+          );
+          button.setDisabled(false).setButtonText("Refresh");
+        }
+      }));
     const authenticatedList = container.createDiv({
       cls: "tephramesh-authenticated-list",
     });
@@ -799,9 +835,9 @@ export class TephrameshSettingTab extends PluginSettingTab {
     }
     for (const installation of status.authenticatedInstallations) {
       const role = installation.source === "mesh"
-        ? "Active device"
+        ? "Device"
         : installation.source === "known"
-          ? "Known device"
+          ? "Known"
           : "No longer configured";
       const approvedBy = installation.isEnrollmentRoot
         ? "Enrollment root"
@@ -813,7 +849,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const authenticatedSetting = new Setting(authenticatedList)
         .setName(installation.name)
         .setDesc(
-          `Device ${shortDeviceId(installation.deviceId)} · Key ${installation.keyId.slice(0, 12)} · ${approvedBy} · ${authenticatedLabel}`,
+          `Device ${shortDeviceId(installation.deviceId)} · Key ${installation.keyId.slice(0, 12)} · ${approvedBy} · ${authenticatedLabel} · ${installation.acceptedCurrentConfig ? "Accepted current config" : "Waiting for acknowledgement"}`,
         );
       authenticatedSetting.settingEl.addClass(
         "tephramesh-authenticated-installation",
@@ -840,6 +876,10 @@ export class TephrameshSettingTab extends PluginSettingTab {
           cls: "tephramesh-authenticated-marker is-root",
         });
       }
+      authenticatedSetting.nameEl.createSpan({
+        text: installation.acceptedCurrentConfig ? "Accepted" : "Waiting",
+        cls: `tephramesh-authenticated-marker ${installation.acceptedCurrentConfig ? "is-accepted" : "is-waiting"}`,
+      });
     }
     let requestCode = "";
     let reviewedCode = "";

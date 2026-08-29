@@ -157,6 +157,16 @@ export class SyncthingClient {
     );
   }
 
+  async scanFolderSubpath(folderId: string, subpath: string): Promise<void> {
+    if (!folderId.trim() || !subpath.trim()) {
+      throw new SyncthingApiError("A folder ID and relative subpath are required for a partial scan.");
+    }
+    await this.request<void>(
+      `/rest/db/scan?folder=${encodeURIComponent(folderId)}&sub=${encodeURIComponent(subpath)}`,
+      { method: "POST" },
+    );
+  }
+
   async updateFolderLabel(folderId: string, label: string): Promise<void> {
     await this.request<void>(
       `/rest/config/folders/${encodeURIComponent(folderId)}`,

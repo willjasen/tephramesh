@@ -269,6 +269,16 @@
   color: #1f1f1f;
 }
 
+.tephramesh-authenticated-marker.is-accepted {
+  background: var(--color-green);
+  color: #1f1f1f;
+}
+
+.tephramesh-authenticated-marker.is-waiting {
+  background: var(--color-yellow);
+  color: #1f1f1f;
+}
+
 .tephramesh-known-button {
   margin-left: 0.5em;
 }
