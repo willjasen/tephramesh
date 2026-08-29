@@ -19,3 +19,17 @@ export function formatFileSize(bytes: number | undefined): string | undefined {
   }
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
+
+export function formatFolderUpdatedAt(
+  stateChanged: string | undefined,
+  now = new Date(),
+): string {
+  if (!stateChanged) return "unknown";
+  const date = new Date(stateChanged);
+  if (Number.isNaN(date.getTime())) return stateChanged;
+
+  const isToday = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  return isToday ? date.toLocaleTimeString() : date.toLocaleString();
+}

@@ -1,4 +1,4 @@
-import { formatDataSize, formatFileSize } from "../src/format";
+import { formatDataSize, formatFileSize, formatFolderUpdatedAt } from "../src/format";
 import { describe, expect, it } from "vitest";
 
 describe("formatDataSize", () => {
@@ -23,5 +23,24 @@ describe("formatFileSize", () => {
   it("returns undefined for unavailable values", () => {
     expect(formatFileSize(undefined)).toBeUndefined();
     expect(formatFileSize(-1)).toBeUndefined();
+  });
+});
+
+describe("formatFolderUpdatedAt", () => {
+  const now = new Date(2026, 7, 28, 15, 30);
+
+  it("shows only the local time when the update occurred today", () => {
+    const updated = new Date(2026, 7, 28, 9, 5);
+    expect(formatFolderUpdatedAt(updated.toISOString(), now)).toBe(updated.toLocaleTimeString());
+  });
+
+  it("shows the local date and time for an earlier date", () => {
+    const updated = new Date(2026, 7, 27, 23, 55);
+    expect(formatFolderUpdatedAt(updated.toISOString(), now)).toBe(updated.toLocaleString());
+  });
+
+  it("preserves unknown and invalid values", () => {
+    expect(formatFolderUpdatedAt(undefined, now)).toBe("unknown");
+    expect(formatFolderUpdatedAt("not-a-date", now)).toBe("not-a-date");
   });
 });

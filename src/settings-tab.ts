@@ -28,18 +28,12 @@ import { formatTransferRate } from "./syncthing-traffic";
 import { EditEndpointModal } from "./edit-endpoint-modal";
 import { MeshNotReadyError } from "./mesh-errors";
 import { DeleteConfigModal } from "./delete-config-modal";
-import { formatDataSize, formatFileSize } from "./format";
+import { formatDataSize, formatFileSize, formatFolderUpdatedAt } from "./format";
 import { operatingSystemPresentation } from "./platform";
 import { RestoreConfigVersionModal } from "./restore-config-version-modal";
 import { ResolveConfigConflictModal } from "./resolve-config-conflict-modal";
 import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
 import { ApproveEnrollmentModal } from "./approve-enrollment-modal";
-
-function formatFolderUpdatedAt(stateChanged: string | undefined): string {
-  if (!stateChanged) return "unknown";
-  const date = new Date(stateChanged);
-  return Number.isNaN(date.getTime()) ? stateChanged : date.toLocaleString();
-}
 
 type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology";
 
