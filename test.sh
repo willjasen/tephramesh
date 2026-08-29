@@ -6,6 +6,28 @@
 
 set -euo pipefail
 
+if [[ -t 1 && -z "${NO_COLOR:-}" ]] || [[ -n "${FORCE_COLOR:-}" ]]; then
+  RED=$'\033[31m'
+  YELLOW=$'\033[33m'
+  GREEN=$'\033[32m'
+  BLUE=$'\033[34m'
+  BOLD=$'\033[1m'
+  RESET=$'\033[0m'
+else
+  RED=''
+  YELLOW=''
+  GREEN=''
+  BLUE=''
+  BOLD=''
+  RESET=''
+fi
+
+info() { printf '%s%s%s\n' "$BLUE" "$*" "$RESET"; }
+success() { printf '%s%s%s\n' "$GREEN" "$*" "$RESET"; }
+warning() { printf '%s%s%s\n' "$YELLOW" "$*" "$RESET" >&2; }
+error() { printf '%s%s%s\n' "$RED" "$*" "$RESET" >&2; }
+step() { printf '%s%s%s\n' "$BOLD" "$*" "$RESET"; }
+
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_PLUGIN_DIR="/Users/willjasen/AppData/Syncthing/Notebox/.obsidian/plugins/tephramesh"
 ICLOUD_PLUGIN_DIR="/Users/willjasen/Library/Mobile Documents/iCloud~md~obsidian/Documents/testing/.obsidian/plugins/tephramesh"
@@ -28,14 +50,14 @@ usage() {
 
 validate_plugin_dir() {
   if [[ "$PLUGIN_DIR" != */.obsidian/plugins/tephramesh ]]; then
-    echo "Refusing to use an unexpected plugin directory: $PLUGIN_DIR" >&2
-    echo "The path must end with /.obsidian/plugins/tephramesh" >&2
+    error "Refusing to use an unexpected plugin directory: $PLUGIN_DIR"
+    error "The path must end with /.obsidian/plugins/tephramesh"
     exit 1
   fi
 }
 
 build_plugin() {
-  echo "Installing dependencies and building Tephramesh..."
+  step "Installing dependencies and building Tephramesh..."
   cd "$SOURCE_DIR"
   npm ci --silent
   npm run build
@@ -44,32 +66,32 @@ build_plugin() {
     PLUGIN_DIR="$plugin_dir"
     validate_plugin_dir
     if [[ -d "$PLUGIN_DIR" ]]; then
-      echo "Plugin directory already exists: $PLUGIN_DIR"
+      info "Plugin directory already exists: $PLUGIN_DIR"
     else
-      echo "Creating plugin directory: $PLUGIN_DIR"
+      info "Creating plugin directory: $PLUGIN_DIR"
       mkdir -p "$PLUGIN_DIR"
     fi
 
     for file in "${FILES[@]}"; do
       if [[ ! -f "$SOURCE_DIR/$file" ]]; then
-        echo "Build output is missing: $SOURCE_DIR/$file" >&2
+        error "Build output is missing: $SOURCE_DIR/$file"
         exit 1
       fi
-      echo "Copying $file to $PLUGIN_DIR"
+      info "Copying $file to $PLUGIN_DIR"
       cp "$SOURCE_DIR/$file" "$PLUGIN_DIR/$file"
     done
   done
 
-  echo "Tephramesh was copied to: ${PLUGIN_DIRS[*]}"
+  success "Tephramesh was copied to: ${PLUGIN_DIRS[*]}"
   if [[ ! -x "$OBSIDIAN_CLI" ]]; then
-    echo "Obsidian CLI was not found or is not executable: $OBSIDIAN_CLI" >&2
+    error "Obsidian CLI was not found or is not executable: $OBSIDIAN_CLI"
     exit 1
   fi
   for vault_name in "${VAULT_NAMES[@]}"; do
-    echo "Reloading Tephramesh in the $vault_name vault..."
+    step "Reloading Tephramesh in the $vault_name vault..."
     "$OBSIDIAN_CLI" "vault=$vault_name" plugin:disable id=tephramesh filter=community
     "$OBSIDIAN_CLI" "vault=$vault_name" plugin:enable id=tephramesh filter=community
-    echo "Tephramesh was disabled and re-enabled in the $vault_name vault."
+    success "Tephramesh was disabled and re-enabled in the $vault_name vault."
   done
 }
 
@@ -78,14 +100,14 @@ clear_config() {
   validate_plugin_dir
   local config_file="$PLUGIN_DIR/data.json"
   if [[ ! -f "$config_file" ]]; then
-    echo "No Tephramesh configuration exists at: $config_file"
+    warning "No Tephramesh configuration exists at: $config_file"
     return
   fi
 
   rm -f -- "$config_file"
-  echo "Removed Tephramesh configuration: $config_file"
-  echo "Reload Obsidian, or disable and re-enable Tephramesh, before setting it up again."
-  echo "Obsidian Keychain entries are not removed and can be managed in Obsidian settings."
+  success "Removed Tephramesh configuration: $config_file"
+  info "Reload Obsidian, or disable and re-enable Tephramesh, before setting it up again."
+  info "Obsidian Keychain entries are not removed and can be managed in Obsidian settings."
 }
 
 case "${1:-}" in
