@@ -350,6 +350,13 @@ export default class TephrameshPlugin extends Plugin {
     revision: number;
     localInstallationName?: string;
     pendingRequestCode?: string;
+    pendingInstallation?: {
+      bindingId: string;
+      deviceId: string;
+      keyId: string;
+      name: string;
+      source: "mesh" | "known" | "unconfigured";
+    };
     authenticatedInstallations: Array<{
       bindingId: string;
       deviceId: string;
@@ -381,6 +388,21 @@ export default class TephrameshPlugin extends Plugin {
         : undefined,
       pendingRequestCode: local?.pendingRequest
         ? encodeEnrollmentCode(local.pendingRequest)
+        : undefined,
+      pendingInstallation: local?.pendingRequest
+        ? (() => {
+            const installation = installationForEnrollment(
+              local.pendingRequest.bindingId,
+              local.pendingRequest.deviceId,
+            );
+            return {
+              bindingId: local.pendingRequest.bindingId,
+              deviceId: local.pendingRequest.deviceId,
+              keyId: local.pendingRequest.keyId,
+              name: installation?.name ?? "Unconfigured device",
+              source: installation?.source ?? "unconfigured",
+            };
+          })()
         : undefined,
       authenticatedInstallations: this.signingEnrollments.map((enrollment) => {
         const installation = installationForEnrollment(
@@ -535,6 +557,8 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   reviewEnrollmentCode(code: string): {
+    bindingId: string;
+    deviceId: string;
     deviceName: string;
     source: "mesh" | "known";
     keyId: string;
@@ -548,6 +572,8 @@ export default class TephrameshPlugin extends Plugin {
       throw new Error("The enrollment request does not match that configured device.");
     }
     return {
+      bindingId: request.bindingId,
+      deviceId: request.deviceId,
       deviceName: installation.name,
       source: installation.source,
       keyId: request.keyId,

@@ -179,6 +179,10 @@
   border-left-color: var(--color-yellow);
 }
 
+.tephramesh-authenticated-installation.is-pending.setting-item {
+  border-left-color: var(--color-yellow);
+}
+
 .tephramesh-authenticated-installation.is-unconfigured.setting-item {
   border-left-color: var(--color-red);
 }
@@ -205,6 +209,11 @@
 }
 
 .tephramesh-authenticated-role.is-known {
+  background: var(--color-yellow);
+  color: #1f1f1f;
+}
+
+.tephramesh-authenticated-role.is-pending {
   background: var(--color-yellow);
   color: #1f1f1f;
 }
@@ -250,6 +259,12 @@
 .tephramesh-status.is-pending,
 button.tephramesh-pending-button {
   color: var(--text-warning);
+}
+
+button.tephramesh-approve-button,
+button.tephramesh-approve-button:hover {
+  background-color: var(--color-yellow);
+  color: #1f1f1f;
 }
 
 .tephramesh-status.is-paused {

@@ -60,6 +60,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private selectedConfigVersion?: number;
   private signingSelectedInstanceId?: string;
   private generatedEnrollmentApproval?: string;
+  private pendingApprovedInstallation?: {
+    bindingId: string;
+    deviceId: string;
+    deviceName: string;
+    source: "mesh" | "known";
+    keyId: string;
+  };
 
   constructor(app: App, private readonly plugin: TephrameshPlugin) {
     super(app, plugin);
@@ -78,6 +85,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     this.configRevealed = false;
     this.selectedConfigVersion = undefined;
     this.generatedEnrollmentApproval = undefined;
+    this.pendingApprovedInstallation = undefined;
     this.plugin.stopStatusPolling();
   }
 
@@ -563,6 +571,24 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const enrolledList = container.createDiv({
         cls: "tephramesh-authenticated-list",
       });
+      if (status.pendingInstallation) {
+        const pending = status.pendingInstallation;
+        const pendingSetting = new Setting(enrolledList)
+          .setName(pending.name)
+          .setDesc(
+            `Device ${shortDeviceId(pending.deviceId)} · Key ${pending.keyId.slice(0, 12)} · Waiting for an enrolled installation to approve this request`,
+          );
+        pendingSetting.settingEl.addClass(
+          "tephramesh-authenticated-installation",
+          "is-pending",
+        );
+        pendingSetting.nameEl.empty();
+        pendingSetting.nameEl.createSpan({
+          text: "Pending approval",
+          cls: "tephramesh-authenticated-role is-pending",
+        });
+        pendingSetting.nameEl.appendText(` ${pending.name}`);
+      }
       for (const installation of status.authenticatedInstallations) {
         const sourceLabel = installation.source === "mesh"
           ? "Active device"
@@ -687,6 +713,38 @@ export class TephrameshSettingTab extends PluginSettingTab {
     const authenticatedList = container.createDiv({
       cls: "tephramesh-authenticated-list",
     });
+    if (this.pendingApprovedInstallation && status.authenticatedInstallations.some(
+      (installation) => installation.keyId === this.pendingApprovedInstallation!.keyId,
+    )) {
+      this.pendingApprovedInstallation = undefined;
+      this.generatedEnrollmentApproval = undefined;
+    }
+    if (this.pendingApprovedInstallation) {
+      const pending = this.pendingApprovedInstallation;
+      const pendingSetting = new Setting(authenticatedList)
+        .setName(pending.deviceName)
+        .setDesc(
+          `Device ${shortDeviceId(pending.deviceId)} · Key ${pending.keyId.slice(0, 12)} · Waiting for this installation to complete enrollment`,
+        )
+        .addButton((button) => button
+          .setButtonText("Copy approval")
+          .setCta()
+          .onClick(async () => {
+            if (!this.generatedEnrollmentApproval) return;
+            await navigator.clipboard.writeText(this.generatedEnrollmentApproval);
+            button.setButtonText("Copied");
+          }));
+      pendingSetting.settingEl.addClass(
+        "tephramesh-authenticated-installation",
+        "is-pending",
+      );
+      pendingSetting.nameEl.empty();
+      pendingSetting.nameEl.createSpan({
+        text: "Pending approval",
+        cls: "tephramesh-authenticated-role is-pending",
+      });
+      pendingSetting.nameEl.appendText(` ${pending.deviceName}`);
+    }
     for (const installation of status.authenticatedInstallations) {
       const role = installation.source === "mesh"
         ? "Active device"
@@ -742,6 +800,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
         text.setPlaceholder("Paste enrollment request").onChange((value) => {
           requestCode = value.trim();
           reviewedCode = "";
+          reviewButton?.buttonEl.removeClass("tephramesh-approve-button");
           reviewButton?.setDisabled(!requestCode);
         });
       })
@@ -753,6 +812,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
           if (reviewedCode !== requestCode) {
             const review = this.plugin.reviewEnrollmentCode(requestCode);
             reviewedCode = requestCode;
+            button.buttonEl.addClass("tephramesh-approve-button");
             button.setDisabled(false).setButtonText(`Approve ${review.deviceName}`);
             showTephrameshNotice(
               "warning",
@@ -762,13 +822,15 @@ export class TephrameshSettingTab extends PluginSettingTab {
             return;
           }
           const approval = await this.plugin.approveEnrollmentCode(requestCode);
+          const approvedInstallation = this.plugin.reviewEnrollmentCode(requestCode);
           await navigator.clipboard.writeText(approval);
           this.generatedEnrollmentApproval = approval;
+          this.pendingApprovedInstallation = approvedInstallation;
           this.render();
           showTephrameshNotice(
             "success",
             "Enrollment approval copied",
-            "The approval is also displayed below. Paste it into the requesting installation's Enrollment approval field.",
+            "Use the pending device's Copy approval button if you need to copy it again.",
           );
           return;
         } catch (error) {
@@ -778,23 +840,11 @@ export class TephrameshSettingTab extends PluginSettingTab {
             error instanceof Error ? error.message : String(error),
           );
           button.setDisabled(false).setButtonText("Review request");
+          button.buttonEl.removeClass("tephramesh-approve-button");
           reviewedCode = "";
         }
         });
       });
-    if (this.generatedEnrollmentApproval) {
-      new Setting(container)
-        .setName("Enrollment approval")
-        .setDesc("Copy this signed response back to the requesting installation to finish enrollment.")
-        .addTextArea((text) => {
-          text.setValue(this.generatedEnrollmentApproval!).setDisabled(true);
-          text.inputEl.rows = 4;
-        })
-        .addButton((button) => button.setButtonText("Copy approval").setCta().onClick(async () => {
-          await navigator.clipboard.writeText(this.generatedEnrollmentApproval!);
-          button.setButtonText("Copied");
-        }));
-    }
     return status.state;
   }
 
