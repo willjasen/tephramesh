@@ -1240,29 +1240,23 @@ export class TephrameshSettingTab extends PluginSettingTab {
             );
             return;
           }
-          new EditEndpointModal(this.app, instance, apiKey, async (endpoint) => {
-            instance.endpoint = endpoint;
-            await this.plugin.saveSettings();
-            this.display();
-            await this.plugin.refreshInstanceStatus(instance);
-          }).open();
+          new EditEndpointModal(
+            this.app,
+            instance,
+            apiKey,
+            async (endpoint) => {
+              instance.endpoint = endpoint;
+              await this.plugin.saveSettings();
+              this.display();
+              await this.plugin.refreshInstanceStatus(instance);
+            },
+            instance.kind === "device"
+              ? async (enabled) => this.plugin.setInstanceDebugEnabled(instance, enabled)
+              : undefined,
+            this.plugin.getSigningEnvironmentStatus().state === "enrolled",
+          ).open();
         }),
       );
-      if (instance.kind === "device") {
-        setting.addToggle((toggle) => toggle
-          .setTooltip("Write diagnostic events to this device's local log")
-          .setValue(Boolean(instance.debugEnabled))
-          .setDisabled(this.plugin.getSigningEnvironmentStatus().state !== "enrolled")
-          .onChange(async (enabled) => {
-            try {
-              await this.plugin.setInstanceDebugEnabled(instance, enabled);
-            } catch (error) {
-              toggle.setValue(Boolean(instance.debugEnabled));
-              showTephrameshNotice("error", "Debug mode unavailable", error instanceof Error ? error.message : String(error));
-            }
-          }),
-        );
-      }
       if (canRemoveInstance(this.plugin.settings.instances, instance)) {
         setting.addButton((button) =>
           button

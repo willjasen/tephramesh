@@ -34,6 +34,8 @@ export class EditEndpointModal extends Modal {
     private readonly instance: MeshInstance,
     private readonly apiKey: string,
     private readonly onSave: (endpoint: Endpoint) => Promise<void>,
+    private readonly onDebugChange?: (enabled: boolean) => Promise<void>,
+    private readonly debugEnabledEditable = false,
   ) {
     super(app);
     this.endpoint = { ...instance.endpoint };
@@ -101,6 +103,32 @@ export class EditEndpointModal extends Modal {
           this.syncUrl();
         });
       });
+
+    if (this.instance.kind === "device" && this.onDebugChange) {
+      new Setting(contentEl)
+        .setName("Debug logging")
+        .setDesc("Write diagnostic events for this device to its local log.")
+        .addToggle((toggle) => toggle
+          .setValue(Boolean(this.instance.debugEnabled))
+          .setDisabled(!this.debugEnabledEditable)
+          .onChange(async (enabled) => {
+            toggle.setDisabled(true);
+            try {
+              await this.onDebugChange?.(enabled);
+              this.instance.debugEnabled = enabled;
+            } catch (error) {
+              toggle.setValue(Boolean(this.instance.debugEnabled));
+              showTephrameshNotice(
+                "error",
+                "Debug mode unavailable",
+                error instanceof Error ? error.message : String(error),
+              );
+            } finally {
+              toggle.setDisabled(false);
+            }
+          }),
+        );
+    }
 
     const actions = new Setting(contentEl);
     actions.addButton((button) =>
