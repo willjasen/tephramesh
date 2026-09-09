@@ -356,7 +356,7 @@ export default class TephrameshPlugin extends Plugin {
         history,
         this.signingEnrollments,
         this.signingRootKeyId,
-        this.signedConfigRevision + 1,
+        Math.max(this.signedConfigRevision + 1, blocks.at(-1)?.version ?? 0),
         localSigning,
         this.signingRevokedEnrollmentKeyIds,
       );
@@ -1382,8 +1382,14 @@ export default class TephrameshPlugin extends Plugin {
           recipient,
           true,
         );
+        const latestConfigVersion = this.configHistoryBlocks.at(-1)?.version ?? 0;
+        const needsSigningRevisionCatchUp = Boolean(
+          enrolledLocal &&
+          !conflictingRevision &&
+          verified.envelope.revision < latestConfigVersion,
+        );
         if (enrolledLocal) this.setLocalSigningRecord(enrolledLocal);
-        if (completePendingApproval || (repairedHistory && enrolledLocal)) {
+        if (completePendingApproval || (repairedHistory && enrolledLocal) || needsSigningRevisionCatchUp) {
           await this.saveSettings();
         } else if (enrolledLocal && !conflictingRevision) {
           try {
