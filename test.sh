@@ -59,8 +59,25 @@ validate_plugin_dir() {
 build_plugin() {
   step "Installing dependencies and building Tephramesh..."
   cd "$SOURCE_DIR"
-  npm ci --silent
-  npm run build
+  if command -v npm >/dev/null 2>&1; then
+    npm ci --silent
+    npm run build
+  else
+    # Codex's bundled runtime provides Node and pnpm, but not a standalone
+    # npm executable. Keep the test/deploy helper usable in that environment
+    # without creating or changing a pnpm lockfile.
+    if ! command -v pnpm >/dev/null 2>&1; then
+      error "Neither npm nor pnpm is available. Install Node.js/npm or pnpm."
+      exit 1
+    fi
+    # The bundled pnpm launcher is adjacent to its Node runtime, but child
+    # scripts (tsc/esbuild) still resolve `node` through PATH.
+    PNPM_BIN="$(command -v pnpm)"
+    BUNDLED_NODE_BIN="$(cd -- "$(dirname -- "$PNPM_BIN")/../../node/bin" && pwd)"
+    export PATH="$BUNDLED_NODE_BIN:$PATH"
+    pnpm install --lockfile=false --silent
+    pnpm run build
+  fi
 
   for plugin_dir in "${PLUGIN_DIRS[@]}"; do
     PLUGIN_DIR="$plugin_dir"

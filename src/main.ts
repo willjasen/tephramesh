@@ -924,9 +924,15 @@ export default class TephrameshPlugin extends Plugin {
       const activeKeyIds = this.signingEnrollments
         .map((enrollment) => enrollment.keyId)
         .filter((keyId) => !this.signingRevokedEnrollmentKeyIds.includes(keyId));
+      // The local installation has directly observed its own accepted
+      // configuration. Count that observation even before its signed
+      // confirmation has propagated back through the mesh; peer observations
+      // still require a verified confirmation file.
       this.localAcceptanceObserverKeyIds = new Set(
         local && accepted.has(local.keyId)
-          ? activeKeyIds.filter((observerKeyId) => confirmations.get(observerKeyId)?.has(local.keyId))
+          ? activeKeyIds.filter((observerKeyId) =>
+              observerKeyId === local.keyId || confirmations.get(observerKeyId)?.has(local.keyId)
+            )
           : [],
       );
       const current = `${[...accepted].sort().join("|")}:${[...this.localAcceptanceObserverKeyIds].sort().join("|")}`;

@@ -340,8 +340,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
           : signingStatus.state !== "enrolled"
           ? "This installation is not enrolled for configuration signing"
           : allAccepted
-            ? `All ${signingStatus.enrolledCount} enrolled installations accepted signed revision ${signingStatus.revision}, and all saw this installation's acceptance`
-            : `${signingStatus.acceptedCount} of ${signingStatus.enrolledCount} accepted; this installation's acceptance seen by ${signingStatus.acceptanceSeenByCount} of ${signingStatus.enrolledCount}`;
+            ? `All ${signingStatus.enrolledCount} enrolled installations loaded signed revision ${signingStatus.revision}, and all saw this installation's receipt`
+            : `${signingStatus.acceptedCount} of ${signingStatus.enrolledCount} loaded the configuration; this installation's receipt seen by ${signingStatus.acceptanceSeenByCount} of ${signingStatus.enrolledCount}`;
         indicator.setAttribute("title", acceptanceLabel);
         button.setAttribute("aria-label", `Signing. ${acceptanceLabel}`);
       }
@@ -847,8 +847,8 @@ export class TephrameshSettingTab extends PluginSettingTab {
       cls: "tephramesh-enrolled-status",
     });
     new Setting(container)
-      .setName(`Accepted by ${status.acceptedCount} of ${status.enrolledCount} · This acceptance seen by ${status.acceptanceSeenByCount} of ${status.enrolledCount}`)
-      .setDesc(`Signed configuration revision ${status.revision}. The Signing indicator turns green after every enrolled installation accepts it and reports seeing this installation's acceptance.`)
+      .setName(`Configuration loaded by ${status.acceptedCount} of ${status.enrolledCount} · Your receipt seen by ${status.acceptanceSeenByCount} of ${status.enrolledCount}`)
+      .setDesc(`Signed configuration revision ${status.revision}. Each installation writes a receipt after loading it; the Signing indicator turns green when everyone has loaded the configuration and seen your receipt.`)
       .addButton((button) => button.setButtonText("Refresh").onClick(async () => {
         button.setDisabled(true).setButtonText("Refreshing…");
         try {
@@ -945,7 +945,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       const authenticatedSetting = new Setting(authenticatedList)
         .setName(installation.name)
         .setDesc(
-          `Device ${shortDeviceId(installation.deviceId)} · Key ${installation.keyId.slice(0, 12)} · ${approvedBy} · ${authenticatedLabel} · ${installation.acceptedCurrentConfig ? "Accepted current config" : "Waiting for acknowledgement"} · ${installation.hasSeenLocalAcceptance ? "Saw this installation's acceptance" : "Waiting to see this installation's acceptance"}`,
+          `Device ${shortDeviceId(installation.deviceId)} · Key ${installation.keyId.slice(0, 12)} · ${approvedBy} · ${authenticatedLabel} · ${installation.acceptedCurrentConfig ? "Loaded current configuration" : "Waiting to load configuration"} · ${installation.hasSeenLocalAcceptance ? "Saw this installation's receipt" : "Waiting to see this installation's receipt"}`,
         );
       authenticatedSetting.settingEl.addClass(
         "tephramesh-authenticated-installation",
