@@ -863,11 +863,17 @@ export class TephrameshSettingTab extends PluginSettingTab {
         }
       }));
     acceptanceSetting.nameEl.empty();
-    acceptanceSetting.nameEl.createDiv({
-      text: `Using this configuration: ${status.acceptedCount} of ${status.enrolledCount}`,
+    const loadedLine = acceptanceSetting.nameEl.createDiv();
+    loadedLine.appendText("Using this configuration: ");
+    loadedLine.createSpan({
+      text: `${status.acceptedCount} of ${status.enrolledCount}`,
+      cls: `tephramesh-signing-count ${status.acceptedCount === status.enrolledCount ? "is-complete" : "is-pending"}`,
     });
-    acceptanceSetting.nameEl.createDiv({
-      text: `Know this device is up to date: ${status.acceptanceSeenByCount} of ${status.enrolledCount}`,
+    const upToDateLine = acceptanceSetting.nameEl.createDiv();
+    upToDateLine.appendText("Know this device is up to date: ");
+    upToDateLine.createSpan({
+      text: `${status.acceptanceSeenByCount} of ${status.enrolledCount}`,
+      cls: `tephramesh-signing-count ${status.acceptanceSeenByCount === status.enrolledCount ? "is-complete" : "is-pending"}`,
     });
     const authenticatedList = container.createDiv({
       cls: "tephramesh-authenticated-list",

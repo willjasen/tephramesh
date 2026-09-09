@@ -259,6 +259,14 @@
   margin: var(--size-4-2) 0 var(--size-4-1);
 }
 
+.tephramesh-signing-count.is-complete {
+  color: var(--text-success);
+}
+
+.tephramesh-signing-count.is-pending {
+  color: var(--text-warning);
+}
+
 .tephramesh-enrolled-details {
   margin-top: 0;
 }
