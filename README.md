@@ -1,5 +1,7 @@
 # Tephramesh
 
+tephramesh - private obsidian vault syncing using infrastructure you control
+
 [tephramesh](https://github.com/willjasen/tephramesh) is an obsidian plugin for monitoring and configuring a dedicated [syncthing](https://syncthing.net/) mesh for a single [obsidian](https://obsidian.md/) vault.
 
 # Overview
