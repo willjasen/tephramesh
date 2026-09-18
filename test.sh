@@ -71,9 +71,6 @@ build_plugin() {
     pnpm run build
   fi
 
-  step "Advancing local deployment version..."
-  node version-bump.mjs --patch
-
   validate_plugin_dir
   if [[ -d "$PLUGIN_DIR" ]]; then
     info "Plugin directory already exists: $PLUGIN_DIR"
