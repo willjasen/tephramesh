@@ -949,3 +949,14 @@ button.tephramesh-approve-button:hover {
   font-family: inherit;
   font-size: inherit;
 }
+.tephramesh-content-signing-status {
+  color: var(--text-success);
+}
+
+.tephramesh-content-signing-status.is-invalid {
+  color: var(--text-error);
+}
+
+.tephramesh-content-signing-status.is-pending {
+  color: var(--text-warning);
+}
