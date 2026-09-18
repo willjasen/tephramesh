@@ -12,6 +12,7 @@ import {
   assertEnrollmentMembershipAccepted,
   assertSignedRevisionAccepted,
   canonicalJson,
+  applyEnrollmentApprovalToLocalSigningRecord,
   createConfigAcceptanceAcknowledgement,
   createConfigAcceptanceConfirmation,
   createEnrollmentRequest,
@@ -230,6 +231,36 @@ describe("configuration signing", () => {
 
     decoded.request.nonce = "different";
     await expect(verifyEnrollmentApproval(decoded, pending)).rejects.toThrow(/match/i);
+  });
+
+  it("accepts the approved signed revision without inventing a speculative next revision", async () => {
+    const { enrollment: rootEnrollment, local: rootLocal } = await genesis();
+    const joiningKeys = await generateSigningKeyPair();
+    const request = createEnrollmentRequest("instance-b", "device-b", joiningKeys);
+    const enrollment = await approveEnrollmentRequest(request, rootLocal);
+    const approval = await createEnrollmentApproval(
+      rootLocal.keyId,
+      42,
+      "a".repeat(64),
+      request,
+      [rootEnrollment, enrollment],
+      rootLocal,
+    );
+    const pending: LocalDeviceSigningRecord = {
+      format: "tephramesh-local-device-signing-v1",
+      bindingId: request.bindingId,
+      deviceId: request.deviceId,
+      pendingRequest: request,
+      ...joiningKeys,
+    };
+
+    const accepted = applyEnrollmentApprovalToLocalSigningRecord(pending, approval);
+
+    expect(accepted.rootKeyId).toBe(rootLocal.keyId);
+    expect(accepted.pendingRequest).toBeUndefined();
+    expect(accepted.pendingApproval).toEqual(approval);
+    expect(accepted.lastAcceptedRevision).toBe(42);
+    expect(accepted.lastAcceptedEnvelopeHash).toBe("a".repeat(64));
   });
 
   it("requires an enrolled signature to cancel the exact pending request", async () => {

@@ -1,4 +1,5 @@
-import { MarkdownView, normalizePath, Plugin, setIcon, type WorkspaceLeaf } from "obsidian";
+import { MarkdownView, normalizePath, Plugin, setIcon, type TFile, type WorkspaceLeaf } from "obsidian";
+import { EditorView } from "@codemirror/view";
 import { coherentOfflineTimeoutSeconds, DEFAULT_SETTINGS, normalizeInstanceDisplayOrder, type InstanceRuntimeStatus, type MeshInstance, type TephrameshSettings, type KnownDevice } from "./model";
 import { TephrameshSettingTab } from "./settings-tab";
 import { SyncthingApiError, SyncthingClient } from "./syncthing-client";
@@ -53,6 +54,7 @@ import {
   approveEnrollmentRequest,
   assertEnrollmentMembershipAccepted,
   assertSignedRevisionAccepted,
+  applyEnrollmentApprovalToLocalSigningRecord,
   createConfigAcceptanceAcknowledgement,
   createConfigAcceptanceConfirmation,
   createEnrollmentRequest,
@@ -79,6 +81,25 @@ import {
 } from "./config-signing";
 import { createConfigJournalRecord, isConfigJournalRecord, type ConfigJournalRecord } from "./config-journal";
 import { DebugLogger } from "./debug-logger";
+import { folderStatusHasPendingItems } from "./syncthing-completion";
+import {
+  buildCliState,
+  buildCliTestResult,
+  type CliCheck,
+  type TephrameshCliState,
+  type TephrameshCliTestResult,
+} from "./cli";
+import { INTERNAL_SECRET_ACCESS, requireInternalSecretAccess } from "./internal-access";
+import {
+  CONTENT_SIGNATURE_DIRECTORY,
+  contentSignaturePath,
+  createContentSignature,
+  hasLocalContentChange,
+  isContentSignaturePath,
+  sha256Content,
+  verifyContentSignature,
+  type ContentSignatureRecord,
+} from "./content-signing";
 
 interface EncryptedSettingsEnvelope {
   schemaVersion: 3;
@@ -111,7 +132,7 @@ export default class TephrameshPlugin extends Plugin {
     issues: [],
     repairBlockedReasons: [],
   };
-  private secrets?: TephrameshSecrets;
+  #secrets?: TephrameshSecrets;
   private encryptedData = "";
   private configHistoryBlocks: ConfigHistoryBlock[] = [];
   private signingRootKeyId = "";
@@ -132,6 +153,10 @@ export default class TephrameshPlugin extends Plugin {
   private configSubpathScans = new Map<string, Promise<void>>();
   private remoteConfigSubpathScanTimer?: number;
   private noteScanDebounceTimers = new Map<string, number>();
+  private contentSigningDebounceTimers = new Map<string, number>();
+  private contentSigningLocalEdits = new Set<string>();
+  private contentSigningStatusTimer?: number;
+  private contentSigningStatusPendingUntil = new Map<string, number>();
   private pendingNoteScans = new Set<string>();
   private noteScanQueueInProgress = false;
   private readonly debugLogger = new DebugLogger(
@@ -140,6 +165,7 @@ export default class TephrameshPlugin extends Plugin {
   );
   private settingTab!: TephrameshSettingTab;
   private statusBarItem?: HTMLElement;
+  private contentSigningStatusItem?: HTMLElement;
   private statusBarTimer?: number;
   private pollingTimer?: number;
   private statusPollingEnabled = false;
@@ -167,6 +193,15 @@ export default class TephrameshPlugin extends Plugin {
   private static readonly REMOTE_CONFIG_SCAN_DELAY_MS = 3_000;
   private static readonly NOTE_SCAN_DEBOUNCE_MS = 500;
 
+  /**
+   * Supported automation surface for Obsidian CLI `eval`. It intentionally
+   * contains no configuration-changing operations.
+   */
+  readonly cli = Object.freeze({
+    state: (): TephrameshCliState => this.getCliState(),
+    test: (): Promise<TephrameshCliTestResult> => this.runCliTests(),
+  });
+
   async onload(): Promise<void> {
     await this.loadSettings();
     await this.tryUnlockStoredIdentity();
@@ -185,6 +220,9 @@ export default class TephrameshPlugin extends Plugin {
       this.openTephrameshSettings();
     });
     this.updateStatusBar();
+    this.contentSigningStatusItem = this.addStatusBarItem();
+    this.contentSigningStatusItem.addClass("tephramesh-content-signing-status");
+    this.contentSigningStatusItem.hide();
     this.addCommand({
       id: "refresh-syncthing-status",
       name: "Refresh Syncthing status",
@@ -193,20 +231,61 @@ export default class TephrameshPlugin extends Plugin {
         showTephrameshNotice("success", "Status refreshed");
       },
     });
+    this.addCommand({
+      id: "enable-signing-for-current-note",
+      name: "Enable signing for current note",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension.toLowerCase() !== "md" || !this.canSignVaultContent()) return false;
+        if (!checking) void this.enableContentSigning(file);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "disable-signing-for-current-note",
+      name: "Disable signing for current note",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension.toLowerCase() !== "md" || !this.canSignVaultContent()) return false;
+        if (!checking) void this.disableContentSigning(file);
+        return true;
+      },
+    });
+    this.registerEditorExtension(EditorView.updateListener.of((update) => {
+      if (!hasLocalContentChange(update.transactions)) return;
+      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (view?.file) this.scheduleContentSigning(view.file);
+    }));
     this.app.workspace.onLayoutReady(() => {
       this.registerEvent(this.app.vault.on("modify", (file) => {
         this.scheduleLocalNoteScan(file.path);
+        if ("extension" in file && this.contentSigningLocalEdits.has(file.path)) {
+          this.scheduleContentSigning(file as TFile, true);
+        }
+        if (isContentSignaturePath(file.path) || this.app.workspace.getActiveFile()?.path === file.path) {
+          if (this.app.workspace.getActiveFile()?.path === file.path) {
+            this.contentSigningStatusPendingUntil.set(file.path, Date.now() + 1_500);
+          }
+          this.scheduleContentSigningStatusRefresh();
+        }
       }));
       this.registerEvent(this.app.vault.on("create", (file) => {
         this.scheduleLocalNoteScan(file.path);
+        if (isContentSignaturePath(file.path)) this.scheduleContentSigningStatusRefresh();
       }));
       this.registerEvent(this.app.vault.on("delete", (file) => {
         this.scheduleLocalNoteScan(file.path);
+        if (!isContentSignaturePath(file.path)) void this.removeContentSignature(file.path);
       }));
       this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
         this.scheduleLocalNoteScan(oldPath);
         this.scheduleLocalNoteScan(file.path);
+        if ("extension" in file) void this.handleSignedContentRename(file as TFile, oldPath);
       }));
+      this.registerEvent(this.app.workspace.on("file-open", () => {
+        void this.refreshContentSigningStatus();
+      }));
+      void this.refreshContentSigningStatus();
     });
     this.restartNoteSyncPolling();
     this.restartStatusBarPolling();
@@ -214,7 +293,7 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   onunload(): void {
-    this.secrets = undefined;
+    this.#secrets = undefined;
     if (this.pollingTimer !== undefined) window.clearInterval(this.pollingTimer);
     if (this.noteSyncTimer !== undefined) window.clearInterval(this.noteSyncTimer);
     if (this.statusBarTimer !== undefined) window.clearInterval(this.statusBarTimer);
@@ -229,10 +308,15 @@ export default class TephrameshPlugin extends Plugin {
     for (const timer of this.noteScanDebounceTimers.values()) window.clearTimeout(timer);
     this.noteScanDebounceTimers.clear();
     this.pendingNoteScans.clear();
+    for (const timer of this.contentSigningDebounceTimers.values()) window.clearTimeout(timer);
+    this.contentSigningDebounceTimers.clear();
+    this.contentSigningLocalEdits.clear();
+    if (this.contentSigningStatusTimer !== undefined) window.clearTimeout(this.contentSigningStatusTimer);
+    this.contentSigningStatusPendingUntil.clear();
   }
 
   async onExternalSettingsChange(): Promise<void> {
-    this.secrets = undefined;
+    this.#secrets = undefined;
     await this.loadSettings();
     await this.tryUnlockStoredIdentity();
     this.restartPolling();
@@ -240,6 +324,7 @@ export default class TephrameshPlugin extends Plugin {
     this.restartStatusBarPolling();
     this.settingTab.rerenderIfVisible();
     this.updateStatusBar();
+    void this.refreshContentSigningStatus();
     void this.refreshStatuses(true);
     void this.refreshReconciliation(true);
   }
@@ -308,7 +393,7 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   private async saveSettingsUnsafe(): Promise<void> {
-    if (!this.secrets || !this.settings.ageRecipient) {
+    if (!this.#secrets || !this.settings.ageRecipient) {
       throw new Error("Unlock Tephramesh encryption before saving settings.");
     }
     if (this.signedConfigConflict) {
@@ -324,7 +409,7 @@ export default class TephrameshPlugin extends Plugin {
     const protectedData = {
       schemaVersion: 1,
       settings: protectedSettings,
-      secrets: this.secrets,
+      secrets: this.#secrets,
     } as const;
     const retention = normalizeConfigHistoryVersions(this.settings.configHistoryVersions || DEFAULT_CONFIG_HISTORY_VERSIONS);
     const configHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(protectedData)));
@@ -407,7 +492,7 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   private requestConfigSubpathScans(): void {
-    if (!this.secrets || !this.settings.folderId) return;
+    if (!this.#secrets || !this.settings.folderId) return;
     const devices = activeMeshInstances(this.settings.instances).filter(
       (instance) => instance.kind === "device",
     );
@@ -434,7 +519,7 @@ export default class TephrameshPlugin extends Plugin {
     void Promise.allSettled(devices.map(async (instance) => {
       const existing = this.configSubpathScans.get(instance.id);
       if (existing) return existing;
-      const apiKey = this.getApiKey(instance.id);
+      const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
       if (!apiKey) return;
       const client = new SyncthingClient(instance.endpoint, apiKey);
       const scan = client.scanFolderSubpath(
@@ -480,12 +565,12 @@ export default class TephrameshPlugin extends Plugin {
         this.pendingNoteScans.delete(path);
         if (
           this.signingTrust !== "enrolled" ||
-          !this.secrets ||
+          !this.#secrets ||
           !this.settings.folderId
         ) continue;
         const device = this.localBoundDevice();
         if (!device) continue;
-        const apiKey = this.getApiKey(device.id);
+        const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, device.id);
         if (!apiKey) continue;
         try {
           await new SyncthingClient(device.endpoint, apiKey).scanFolderSubpath(
@@ -499,6 +584,244 @@ export default class TephrameshPlugin extends Plugin {
     } finally {
       this.noteScanQueueInProgress = false;
     }
+  }
+
+  private canSignVaultContent(): boolean {
+    const local = this.getLocalSigningRecord();
+    return this.signingTrust === "enrolled" && Boolean(
+      local?.rootKeyId &&
+      local.rootKeyId === this.signingRootKeyId &&
+      this.signingEnrollments.some((entry) => entry.keyId === local.keyId) &&
+      !this.signingRevokedEnrollmentKeyIds.includes(local.keyId),
+    );
+  }
+
+  private async ensureContentSignatureDirectory(): Promise<void> {
+    const adapter = this.app.vault.adapter;
+    if (!(await adapter.exists(".tephramesh"))) await adapter.mkdir(".tephramesh");
+    if (!(await adapter.exists(CONTENT_SIGNATURE_DIRECTORY))) {
+      await adapter.mkdir(CONTENT_SIGNATURE_DIRECTORY);
+    }
+  }
+
+  private async readContentSignature(file: TFile): Promise<ContentSignatureRecord | null> {
+    const content = await this.app.vault.readBinary(file);
+    const contentHash = await sha256Content(content);
+    const candidatePaths = [
+      await contentSignaturePath(file.path, contentHash),
+      await contentSignaturePath(file.path),
+    ];
+    for (const recordPath of candidatePaths) {
+      if (!(await this.app.vault.adapter.exists(recordPath))) continue;
+      try {
+        return JSON.parse(await this.app.vault.adapter.read(recordPath)) as ContentSignatureRecord;
+      } catch {
+        // Continue to the legacy or alternate candidate if a sync was partial.
+      }
+    }
+    return null;
+  }
+
+  private async writeContentSignature(file: TFile): Promise<void> {
+    if (!this.canSignVaultContent()) {
+      throw new Error("This installation must be enrolled before signing vault content.");
+    }
+    const local = this.getLocalSigningRecord();
+    if (!local) throw new Error("The local signing key is unavailable.");
+    const content = await this.app.vault.readBinary(file);
+    const record = await createContentSignature(
+      file.path,
+      content,
+      this.signingRootKeyId,
+      local,
+    );
+    await this.ensureContentSignatureDirectory();
+    await this.app.vault.adapter.write(
+      await contentSignaturePath(file.path, record.contentHash),
+      JSON.stringify(record, null, 2),
+    );
+    if (this.app.workspace.getActiveFile()?.path === file.path) {
+      await this.refreshContentSigningStatus();
+    }
+  }
+
+  private async enableContentSigning(file: TFile): Promise<void> {
+    try {
+      await this.writeContentSignature(file);
+      showTephrameshNotice("success", "Note signing enabled", "Tephramesh will sign local edits to this note.");
+    } catch (error) {
+      showTephrameshNotice("error", "Could not enable note signing", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async disableContentSigning(file: TFile): Promise<void> {
+    try {
+      const removed = await this.removeContentSignature(file.path);
+      await this.refreshContentSigningStatus();
+      showTephrameshNotice(
+        removed ? "success" : "warning",
+        removed ? "Note signing disabled" : "Note signing was not enabled",
+      );
+    } catch (error) {
+      showTephrameshNotice("error", "Could not disable note signing", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async removeContentSignature(path: string): Promise<boolean> {
+    const directory = CONTENT_SIGNATURE_DIRECTORY;
+    if (!(await this.app.vault.adapter.exists(directory))) return false;
+    const listing = await this.app.vault.adapter.list(directory);
+    let removed = false;
+    for (const recordPath of listing.files) {
+      if (!recordPath.endsWith(".json")) continue;
+      try {
+        const record = JSON.parse(await this.app.vault.adapter.read(recordPath)) as Partial<ContentSignatureRecord>;
+        if (record.path !== path) continue;
+        await this.app.vault.adapter.remove(recordPath);
+        removed = true;
+      } catch {
+        // Leave malformed or unrelated synchronized records for inspection.
+      }
+    }
+    return removed;
+  }
+
+  private scheduleContentSigningStatusRefresh(delay = 250): void {
+    if (this.contentSigningStatusTimer !== undefined) window.clearTimeout(this.contentSigningStatusTimer);
+    this.contentSigningStatusTimer = window.setTimeout(() => {
+      this.contentSigningStatusTimer = undefined;
+      void this.refreshContentSigningStatus();
+    }, delay);
+  }
+
+  private scheduleContentSigning(file: TFile, afterVaultWrite = false): void {
+    if (isContentSignaturePath(file.path) || file.path === ".obsidian" || file.path.startsWith(".obsidian/")) return;
+    if (!afterVaultWrite) this.contentSigningLocalEdits.add(file.path);
+    const previous = this.contentSigningDebounceTimers.get(file.path);
+    if (previous !== undefined) window.clearTimeout(previous);
+    const timer = window.setTimeout(() => {
+      this.contentSigningDebounceTimers.delete(file.path);
+      void (async () => {
+        if (!(await this.readContentSignature(file))) {
+          this.contentSigningLocalEdits.delete(file.path);
+          return;
+        }
+        try {
+          await this.writeContentSignature(file);
+        } catch (error) {
+          showTephrameshNotice("error", "Note signing failed", error instanceof Error ? error.message : String(error));
+        } finally {
+          this.contentSigningLocalEdits.delete(file.path);
+          if (this.app.workspace.getActiveFile()?.path === file.path) {
+            await this.refreshContentSigningStatus();
+          }
+        }
+      })();
+    }, afterVaultWrite ? 250 : 2_500);
+    this.contentSigningDebounceTimers.set(file.path, timer);
+    if (this.app.workspace.getActiveFile()?.path === file.path) {
+      void this.refreshContentSigningStatus();
+    }
+  }
+
+  private async handleSignedContentRename(file: TFile, oldPath: string): Promise<void> {
+    if (isContentSignaturePath(oldPath)) return;
+    const oldRecord = await this.findContentSignatureForPath(oldPath);
+    if (!oldRecord) return;
+    await this.removeContentSignature(oldPath);
+    try {
+      await this.writeContentSignature(file);
+    } catch (error) {
+      showTephrameshNotice("error", "Renamed note could not be signed", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async findContentSignatureForPath(path: string): Promise<ContentSignatureRecord | null> {
+    const directory = CONTENT_SIGNATURE_DIRECTORY;
+    if (!(await this.app.vault.adapter.exists(directory))) return null;
+    const listing = await this.app.vault.adapter.list(directory);
+    for (const recordPath of listing.files) {
+      if (!recordPath.endsWith(".json")) continue;
+      try {
+        const record = JSON.parse(await this.app.vault.adapter.read(recordPath)) as ContentSignatureRecord;
+        if (record.path === path) return record;
+      } catch {
+        // Ignore records that have not finished syncing.
+      }
+    }
+    return null;
+  }
+
+  private contentSignerName(record: ContentSignatureRecord): string {
+    const enrollment = this.signingEnrollments.find((entry) => entry.keyId === record.signerKeyId);
+    if (!enrollment) return record.signerKeyId.slice(0, 12);
+    return this.settings.instances.find((entry) => entry.deviceId === enrollment.deviceId)?.name ??
+      this.settings.knownDevices.find((entry) => entry.deviceId === enrollment.deviceId)?.name ??
+      enrollment.deviceId.split("-", 1)[0]?.slice(0, 7) ??
+      record.signerKeyId.slice(0, 12);
+  }
+
+  private async refreshContentSigningStatus(): Promise<void> {
+    const item = this.contentSigningStatusItem;
+    if (!item) return;
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      item.hide();
+      return;
+    }
+    const content = await this.app.vault.readBinary(file);
+    const record = await this.readContentSignature(file);
+    const pendingUntil = this.contentSigningStatusPendingUntil.get(file.path) ?? 0;
+    if (pendingUntil > Date.now()) {
+      const label = "Updating note signature…";
+      item.setText(label);
+      item.setAttribute("aria-label", label);
+      item.setAttribute("title", "Waiting for the note and its synchronized signature to settle.");
+      item.removeClass("is-invalid");
+      item.addClass("is-pending");
+      item.show();
+      this.scheduleContentSigningStatusRefresh(Math.max(100, pendingUntil - Date.now()));
+      return;
+    }
+    this.contentSigningStatusPendingUntil.delete(file.path);
+    if (!record) {
+      item.hide();
+      return;
+    }
+    if (this.contentSigningLocalEdits.has(file.path)) {
+      const label = "Signing local note edit…";
+      item.setText(label);
+      item.setAttribute("aria-label", label);
+      item.setAttribute("title", "Tephramesh will sign this note after Obsidian finishes saving it.");
+      item.removeClass("is-invalid");
+      item.addClass("is-pending");
+      item.show();
+      return;
+    }
+    try {
+      const verified = await verifyContentSignature(
+        record,
+        file.path,
+        content,
+        this.signingRootKeyId,
+        this.signingEnrollments,
+        this.signingRevokedEnrollmentKeyIds,
+      );
+      const label = `Note last signed by ${this.contentSignerName(verified)}`;
+      item.setText(label);
+      item.setAttribute("aria-label", label);
+      item.setAttribute("title", `${label} at ${new Date(verified.signedAt).toLocaleString()}`);
+      item.removeClass("is-invalid");
+      item.removeClass("is-pending");
+    } catch (error) {
+      const label = "Note signature is missing or invalid";
+      item.setText(label);
+      item.setAttribute("aria-label", label);
+      item.setAttribute("title", error instanceof Error ? error.message : label);
+      item.addClass("is-invalid");
+      item.removeClass("is-pending");
+    }
+    item.show();
   }
 
   async deleteConfig(): Promise<void> {
@@ -528,7 +851,7 @@ export default class TephrameshPlugin extends Plugin {
     }
 
     this.settings = structuredClone(DEFAULT_SETTINGS);
-    this.secrets = undefined;
+    this.#secrets = undefined;
     this.encryptedData = "";
     this.resetSigningRuntimeState();
     this.app.secretStorage.setSecret(DEVICE_SIGNING_SECRET_NAME, "");
@@ -560,20 +883,167 @@ export default class TephrameshPlugin extends Plugin {
     return stats?.size;
   }
 
+  getCliState(): TephrameshCliState {
+    const signing = this.getSigningEnvironmentStatus();
+    return buildCliState({
+      settings: this.settings,
+      runtimeStatuses: this.runtimeStatuses,
+      configured: this.hasEncryptionConfigured(),
+      unlocked: this.secretsAreUnlocked(),
+      signing: {
+        state: signing.state,
+        revision: signing.revision,
+        acceptedCount: signing.acceptedCount,
+        acceptanceSeenByCount: signing.acceptanceSeenByCount,
+        enrolledCount: signing.enrolledCount,
+        localInstallationName: signing.localInstallationName,
+      },
+      reconciliation: this.reconciliationReport,
+    });
+  }
+
+  async runCliTests(): Promise<TephrameshCliTestResult> {
+    const checks: CliCheck[] = [];
+    checks.push({
+      id: "configuration",
+      status: !this.hasEncryptionConfigured() || !this.settings.onboardingComplete
+        ? "fail"
+        : this.secretsAreUnlocked() ? "pass" : "fail",
+      summary: !this.hasEncryptionConfigured()
+        ? "Tephramesh is not configured."
+        : !this.secretsAreUnlocked()
+          ? "The encrypted configuration is locked on this installation."
+          : !this.settings.onboardingComplete
+            ? "Initial setup is incomplete."
+            : "The encrypted configuration is unlocked and setup is complete.",
+    });
+
+    const signing = this.getSigningEnvironmentStatus();
+    checks.push({
+      id: "configuration-signing",
+      status: signing.state === "enrolled" ? "pass" : "warn",
+      summary: signing.state === "enrolled"
+        ? `This installation is enrolled at signed revision ${signing.revision}.`
+        : signing.state === "approval-required"
+          ? "This installation still requires configuration-signing approval."
+          : "Configuration signing is not initialized.",
+    });
+
+    if (!this.settings.folderId) {
+      checks.push({ id: "folder", status: "fail", summary: "No managed folder ID is configured." });
+      return buildCliTestResult(checks);
+    }
+
+    const activeInstances = activeMeshInstances(this.settings.instances);
+    checks.push({
+      id: "mesh-instances",
+      status: activeInstances.length > 0 ? "pass" : "fail",
+      summary: activeInstances.length > 0
+        ? `${activeInstances.length} active mesh instance${activeInstances.length === 1 ? " is" : "s are"} configured.`
+        : "No active mesh instances are configured.",
+    });
+
+    for (const instance of this.settings.instances) {
+      if (instance.setupState === "pending") {
+        checks.push({
+          id: `instance:${instance.id}:setup`,
+          instance: instance.name,
+          status: "warn",
+          summary: "Instance setup is pending; live tests were skipped.",
+        });
+        continue;
+      }
+      const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
+      if (!apiKey) {
+        checks.push({
+          id: `instance:${instance.id}:credentials`,
+          instance: instance.name,
+          status: "fail",
+          summary: "The API key is unavailable in the unlocked configuration.",
+        });
+        continue;
+      }
+      const client = new SyncthingClient(instance.endpoint, apiKey);
+      try {
+        // These calls are intentionally sequential and GET-only. CLI tests must
+        // never reconcile, scan, save, acknowledge, or otherwise change state.
+        const system = await client.getSystemStatus();
+        const version = await client.getVersion();
+        const folder = await client.getFolder(this.settings.folderId);
+        const folderStatus = await client.getFolderStatus(this.settings.folderId);
+        if (system.myID !== instance.deviceId) {
+          checks.push({
+            id: `instance:${instance.id}:identity`,
+            instance: instance.name,
+            status: "fail",
+            summary: "The endpoint reports a different Syncthing device ID.",
+          });
+        } else {
+          checks.push({
+            id: `instance:${instance.id}:identity`,
+            instance: instance.name,
+            status: "pass",
+            summary: `Connected to Syncthing ${version.version}.`,
+          });
+        }
+        const expectedType = instance.kind === "shard" ? "receiveencrypted" : "sendreceive";
+        const folderProblems = [
+          folder.path !== instance.folderPath ? "path differs from configuration" : "",
+          folder.type !== expectedType ? `type is ${folder.type}, expected ${expectedType}` : "",
+          folder.paused ? "folder is paused" : "",
+        ].filter(Boolean);
+        checks.push({
+          id: `instance:${instance.id}:folder`,
+          instance: instance.name,
+          status: folderProblems.length === 0 ? "pass" : "fail",
+          summary: folderProblems.length === 0
+            ? "Managed folder configuration matches Tephramesh."
+            : "Managed folder configuration does not match Tephramesh.",
+          detail: folderProblems.join("; ") || undefined,
+        });
+        const errors = (folderStatus.errors ?? 0) + (folderStatus.pullErrors ?? 0);
+        const healthy = folderStatus.state === "idle" && folderStatus.needFiles === 0 &&
+          folderStatus.needBytes === 0 && errors === 0;
+        checks.push({
+          id: `instance:${instance.id}:sync`,
+          instance: instance.name,
+          status: healthy ? "pass" : "warn",
+          summary: healthy ? "Managed folder is idle and fully synchronized." : "Managed folder is not fully idle and synchronized.",
+          detail: healthy
+            ? undefined
+            : `state=${folderStatus.state}, needFiles=${folderStatus.needFiles}, needBytes=${folderStatus.needBytes}, errors=${errors}`,
+        });
+      } catch (error) {
+        checks.push({
+          id: `instance:${instance.id}:connection`,
+          instance: instance.name,
+          status: "fail",
+          summary: "Could not complete the read-only Syncthing checks.",
+          detail: error instanceof SyncthingApiError
+            ? error.message
+            : "The endpoint did not complete the request.",
+        });
+      }
+    }
+    return buildCliTestResult(checks);
+  }
+
   hasEncryptionConfigured(): boolean {
     return Boolean(this.settings.ageRecipient && this.encryptedData);
   }
 
   secretsAreUnlocked(): boolean {
-    return this.secrets !== undefined;
+    return this.#secrets !== undefined;
   }
 
-  getApiKey(instanceId: string): string | null {
-    return this.secrets?.apiKeys[instanceId] ?? null;
+  getApiKey(access: symbol, instanceId: string): string | null {
+    requireInternalSecretAccess(access);
+    return this.#secrets?.apiKeys[instanceId] ?? null;
   }
 
-  getShardEncryptionKey(): string | null {
-    return this.secrets?.shardEncryptionKey || null;
+  getShardEncryptionKey(access: symbol): string | null {
+    requireInternalSecretAccess(access);
+    return this.#secrets?.shardEncryptionKey || null;
   }
 
   getKnownStatusQueryContext(): {
@@ -590,8 +1060,9 @@ export default class TephrameshPlugin extends Plugin {
     return {};
   }
 
-  getDecryptedConfig(): TephrameshProtectedData | null {
-    if (!this.secrets) return null;
+  getDecryptedConfig(access: symbol): TephrameshProtectedData | null {
+    requireInternalSecretAccess(access);
+    if (!this.#secrets) return null;
     const {
       ageRecipient: _ageRecipient,
       schemaVersion: _envelopeSchemaVersion,
@@ -600,12 +1071,13 @@ export default class TephrameshPlugin extends Plugin {
     return {
       schemaVersion: 1,
       settings: structuredClone(settings),
-      secrets: structuredClone(this.secrets),
+      secrets: structuredClone(this.#secrets),
     };
   }
 
-  getConfigHistory(): ConfigHistoryBlock[] {
-    if (!this.secrets) return [];
+  getConfigHistory(access: symbol): ConfigHistoryBlock[] {
+    requireInternalSecretAccess(access);
+    if (!this.#secrets) return [];
     return structuredClone(this.configHistoryBlocks).reverse();
   }
 
@@ -1117,17 +1589,19 @@ export default class TephrameshPlugin extends Plugin {
         "The signed configuration changed after this approval was created. Generate a new request and approval.",
       );
     }
-    const enrolled: LocalDeviceSigningRecord = {
-      ...local,
-      rootKeyId: approval.rootKeyId,
-      pendingApproval: approval,
-      lastAcceptedRevision: approval.approvedRevision,
-      lastAcceptedEnvelopeHash: approval.approvedEnvelopeHash,
-    };
+    const enrolled = applyEnrollmentApprovalToLocalSigningRecord(local, approval);
     this.signingEnrollments = structuredClone(approval.enrollments);
+    this.signingRootKeyId = approval.rootKeyId;
+    this.signedConfigRevision = approval.approvedRevision;
+    this.signedConfigHash = approval.approvedEnvelopeHash;
+    this.signingRevokedEnrollmentKeyIds = [];
     this.setLocalSigningRecord(enrolled);
     this.signingTrust = "enrolled";
-    await this.saveSettings();
+    this.acceptedConfigKeyIds.clear();
+    this.localAcceptanceObserverKeyIds.clear();
+    this.acceptanceConfirmations.clear();
+    this.requestConfigSubpathScans();
+    await this.refreshCurrentConfigAcknowledgements(true);
   }
 
   async applyEnrollmentCancellation(code: string): Promise<void> {
@@ -1151,7 +1625,7 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   async restoreConfigVersion(version: number): Promise<void> {
-    if (!this.secrets) throw new Error("Unlock Tephramesh encryption before restoring a config version.");
+    if (!this.#secrets) throw new Error("Unlock Tephramesh encryption before restoring a config version.");
     await verifyConfigHistory(this.configHistoryBlocks);
     const block = this.configHistoryBlocks.find((candidate) => candidate.version === version);
     if (!block) throw new Error(`Config version ${version} is no longer available.`);
@@ -1207,7 +1681,7 @@ export default class TephrameshPlugin extends Plugin {
     delete (this.settings as TephrameshSettings & LegacyRootSecrets)
       .shardPasswordSecretName;
     this.settings.ageRecipient = keys.recipient;
-    this.secrets = migrated;
+    this.#secrets = migrated;
     this.app.secretStorage.setSecret(AGE_IDENTITY_SECRET_NAME, keys.identity);
     await this.saveSettings();
   }
@@ -1253,35 +1727,35 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   async setApiKey(instanceId: string, apiKey: string): Promise<void> {
-    if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
-    this.secrets.apiKeys[instanceId] = apiKey;
+    if (!this.#secrets) throw new Error("Unlock Tephramesh secrets first.");
+    this.#secrets.apiKeys[instanceId] = apiKey;
     await this.persistSecrets();
   }
 
   async removeApiKey(instanceId: string): Promise<void> {
-    if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
-    delete this.secrets.apiKeys[instanceId];
+    if (!this.#secrets) throw new Error("Unlock Tephramesh secrets first.");
+    delete this.#secrets.apiKeys[instanceId];
     await this.persistSecrets();
   }
 
   async savePendingInstance(instance: MeshInstance, apiKey: string): Promise<void> {
-    if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
+    if (!this.#secrets) throw new Error("Unlock Tephramesh secrets first.");
     instance.setupState = "pending";
     this.settings.instances.push(instance);
-    this.secrets.apiKeys[instance.id] = apiKey;
+    this.#secrets.apiKeys[instance.id] = apiKey;
     try {
       await this.saveSettings();
     } catch (error) {
       this.settings.instances = this.settings.instances.filter(
         (candidate) => candidate.id !== instance.id,
       );
-      delete this.secrets.apiKeys[instance.id];
+      delete this.#secrets.apiKeys[instance.id];
       throw error;
     }
   }
 
   private async persistSecrets(): Promise<void> {
-    if (!this.secrets || !this.settings.ageRecipient) {
+    if (!this.#secrets || !this.settings.ageRecipient) {
       throw new Error("Tephramesh encryption is not configured.");
     }
     await this.saveSettings();
@@ -1295,7 +1769,7 @@ export default class TephrameshPlugin extends Plugin {
       const keys = await validateAgeKeyPair(this.settings.ageRecipient, identity);
       await this.decryptStoredData(keys.identity);
     } catch {
-      this.secrets = undefined;
+      this.#secrets = undefined;
     }
   }
 
@@ -1440,7 +1914,7 @@ export default class TephrameshPlugin extends Plugin {
     if (this.getLocalSigningRecord()?.rootKeyId) {
       throw new Error("Legacy unsigned configuration cannot replace signed Tephramesh state.");
     }
-    this.secrets = await decryptSecrets(identity, this.encryptedData);
+    this.#secrets = await decryptSecrets(identity, this.encryptedData);
     await this.saveSettings();
   }
 
@@ -1568,7 +2042,7 @@ export default class TephrameshPlugin extends Plugin {
     this.settings.managedIgnoreRules = this.settings.managedIgnoreRules.filter(
       (line) => !/^\/\/ always ignore .*from tephramesh\b/i.test(line.trim()),
     );
-    this.secrets = {
+    this.#secrets = {
       apiKeys: Object.fromEntries(
         Object.entries(protectedCopy.secrets.apiKeys ?? {}).filter(
           (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -1586,7 +2060,7 @@ export default class TephrameshPlugin extends Plugin {
     await Promise.all(
       activeInstances.map(async (instance) => {
         try {
-          const apiKey = this.getApiKey(instance.id);
+          const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
           if (!apiKey) throw new Error("API key unavailable");
           const client = new SyncthingClient(instance.endpoint, apiKey);
           const [status, folder] = await Promise.all([
@@ -1622,16 +2096,16 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   async reconcileNewInstance(candidate: MeshInstance): Promise<void> {
-    const candidateApiKey = this.getApiKey(candidate.id);
+    const candidateApiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, candidate.id);
     if (!candidateApiKey) {
       throw new Error(`API key unavailable for ${candidate.name}.`);
     }
     const candidateClient = new SyncthingClient(candidate.endpoint, candidateApiKey);
-    const shardKey = this.getShardEncryptionKey() ?? "";
+    const shardKey = this.getShardEncryptionKey(INTERNAL_SECRET_ACCESS) ?? "";
 
     for (const existing of activeMeshInstances(this.settings.instances)) {
       if (existing.id === candidate.id) continue;
-      const existingApiKey = this.getApiKey(existing.id);
+      const existingApiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, existing.id);
       if (!existingApiKey) {
         throw new Error(`API key unavailable for ${existing.name}.`);
       }
@@ -1665,7 +2139,7 @@ export default class TephrameshPlugin extends Plugin {
   private async inspectInstanceForReconciliation(
     instance: MeshInstance,
   ): Promise<InstanceReconciliationSnapshot> {
-    const apiKey = this.getApiKey(instance.id);
+    const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
     if (!apiKey) throw new Error("API key unavailable");
     const client = new SyncthingClient(instance.endpoint, apiKey);
     // Reconciliation shares Electron's network stack with status polling.
@@ -1767,7 +2241,7 @@ export default class TephrameshPlugin extends Plugin {
           activeInstances,
           this.settings.folderId,
           this.settings.folderLabel,
-          this.getShardEncryptionKey() ?? "",
+          this.getShardEncryptionKey(INTERNAL_SECRET_ACCESS) ?? "",
         );
       } catch (error) {
         const instance = activeInstances[0];
@@ -1798,7 +2272,7 @@ export default class TephrameshPlugin extends Plugin {
           activeInstances,
           this.settings.folderId,
           this.settings.folderLabel,
-          this.getShardEncryptionKey() ?? "",
+          this.getShardEncryptionKey(INTERNAL_SECRET_ACCESS) ?? "",
           this.settings.knownDevices,
         ),
       );
@@ -1839,7 +2313,7 @@ export default class TephrameshPlugin extends Plugin {
       const activeInstances = activeMeshInstances(this.settings.instances);
       const clients = new Map<string, SyncthingClient>();
       for (const instance of activeInstances) {
-        const apiKey = this.getApiKey(instance.id);
+        const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
         if (!apiKey) throw new Error(`API key unavailable for ${instance.name}.`);
         clients.set(instance.id, new SyncthingClient(instance.endpoint, apiKey));
       }
@@ -1869,7 +2343,7 @@ export default class TephrameshPlugin extends Plugin {
         }
       }
 
-      const shardKey = this.getShardEncryptionKey() ?? "";
+      const shardKey = this.getShardEncryptionKey(INTERNAL_SECRET_ACCESS) ?? "";
       for (const local of activeInstances) {
         const client = clients.get(local.id)!;
         for (const peer of activeInstances) {
@@ -1950,7 +2424,7 @@ export default class TephrameshPlugin extends Plugin {
   async completePendingInstance(candidate: MeshInstance): Promise<void> {
     if (candidate.setupState !== "pending") return;
     await this.assertMeshReadyForInstanceAdd();
-    const apiKey = this.getApiKey(candidate.id);
+    const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, candidate.id);
     if (!apiKey) throw new Error(`API key unavailable for ${candidate.name}.`);
     const client = new SyncthingClient(candidate.endpoint, apiKey);
     const [system, devices, folders] = await Promise.all([
@@ -2015,13 +2489,13 @@ export default class TephrameshPlugin extends Plugin {
     const replacementPrimary = remainingActive.find(
       (candidate) => candidate.kind === "device",
     );
-    const removedApiKey = this.getApiKey(instance.id);
+    const removedApiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
     if (!removedApiKey) {
       throw new Error(`API key unavailable for ${instance.name}.`);
     }
     const removedClient = new SyncthingClient(instance.endpoint, removedApiKey);
     const remainingClients = remainingActive.map((candidate) => {
-      const apiKey = this.getApiKey(candidate.id);
+      const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, candidate.id);
       if (!apiKey) throw new Error(`API key unavailable for ${candidate.name}.`);
       return new SyncthingClient(candidate.endpoint, apiKey);
     });
@@ -2048,8 +2522,8 @@ export default class TephrameshPlugin extends Plugin {
         this.settings.primaryInstanceId = replacementPrimary.id;
       }
       this.runtimeStatuses.delete(instance.id);
-      if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
-      delete this.secrets.apiKeys[instance.id];
+      if (!this.#secrets) throw new Error("Unlock Tephramesh secrets first.");
+      delete this.#secrets.apiKeys[instance.id];
       await this.persistSecrets();
       return;
     }
@@ -2069,8 +2543,8 @@ export default class TephrameshPlugin extends Plugin {
       this.settings.primaryInstanceId = replacementPrimary.id;
     }
     this.runtimeStatuses.delete(instance.id);
-    if (!this.secrets) throw new Error("Unlock Tephramesh secrets first.");
-    delete this.secrets.apiKeys[instance.id];
+    if (!this.#secrets) throw new Error("Unlock Tephramesh secrets first.");
+    delete this.#secrets.apiKeys[instance.id];
     await this.persistSecrets();
   }
 
@@ -2226,18 +2700,39 @@ export default class TephrameshPlugin extends Plugin {
     this.noteSyncRefreshInProgress = true;
     try {
       for (const source of sources) {
-        const apiKey = this.getApiKey(source.id);
+        const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, source.id);
         if (!apiKey) continue;
         try {
           const client = new SyncthingClient(source.endpoint, apiKey);
-          const neededByPeer = await Promise.all([
-            client.getLocalNeededFiles(this.settings.folderId),
-            ...activeInstances
-              .filter((peer) => peer.id !== source.id)
-              .map((peer) =>
-                client.getRemoteNeededFiles(this.settings.folderId, peer.deviceId),
-              ),
-          ]);
+          const neededByPeer = await Promise.all(activeInstances.map(async (peer) => {
+            const peerApiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, peer.id);
+            if (!peerApiKey) throw new Error("Peer API key is unavailable");
+            const peerClient = peer.id === source.id
+              ? client
+              : new SyncthingClient(peer.endpoint, peerApiKey);
+            if (peer.kind === "device") {
+              return peerClient.getLocalNeededFiles(this.settings.folderId);
+            }
+            // A receive-encrypted Shard cannot return plaintext filenames.
+            // Its own folder status is nevertheless authoritative about whether
+            // it needs anything. Only ask a Device for plaintext remote-needed
+            // names when the Shard itself confirms pending data.
+            const cachedPeerStatus = this.runtimeStatuses.get(peer.id);
+            if (
+              isRuntimeStatusFresh(
+                cachedPeerStatus,
+                this.settings.offlineTimeoutSeconds,
+              ) &&
+              cachedPeerStatus?.folder &&
+              !folderStatusHasPendingItems(cachedPeerStatus.folder)
+            ) {
+              return [];
+            }
+            const peerStatus = await peerClient.getFolderStatus(this.settings.folderId);
+            return folderStatusHasPendingItems(peerStatus)
+              ? client.getRemoteNeededFiles(this.settings.folderId, peer.deviceId)
+              : [];
+          }));
           this.pendingNoteMissingHosts = pendingNoteMissingHostsForThreshold(
             neededByPeer,
             activeInstances.length,
@@ -2454,7 +2949,7 @@ export default class TephrameshPlugin extends Plugin {
     const desired = instance.pullOrder ?? "random";
     await this.saveSettings();
     try {
-      const apiKey = this.getApiKey(instance.id);
+      const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
       if (!apiKey) throw new Error("API key unavailable");
       await new SyncthingClient(instance.endpoint, apiKey).updateFolderPullOrder(
         this.settings.folderId,
@@ -2492,7 +2987,7 @@ export default class TephrameshPlugin extends Plugin {
     this.settings.managedIgnoreRules = normalized;
     await this.saveSettings();
     const results = await Promise.allSettled(activeMeshInstances(this.settings.instances).map(async (instance) => {
-      const apiKey = this.getApiKey(instance.id);
+      const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
       if (!apiKey) throw new Error("API key unavailable");
       const client = new SyncthingClient(instance.endpoint, apiKey);
       await client.ensureDefaultIgnoreRules(normalized);
@@ -2511,7 +3006,7 @@ export default class TephrameshPlugin extends Plugin {
     if (!this.settings.folderId || activeInstances.length === 0) return;
     const results = await Promise.allSettled(
       activeInstances.map(async (instance) => {
-        const apiKey = this.getApiKey(instance.id);
+        const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
         if (!apiKey) throw new Error("API key unavailable");
         const client = new SyncthingClient(instance.endpoint, apiKey);
         await client.updateFolderLabel(this.settings.folderId, label);
@@ -2650,7 +3145,7 @@ export default class TephrameshPlugin extends Plugin {
     };
     void debug("status check started", { metadata: checkMetadata });
     try {
-      const apiKey = this.getApiKey(instance.id);
+      const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
       if (!apiKey) throw new Error("API key is unavailable in the encrypted configuration");
       const client = new SyncthingClient(
         instance.endpoint,
@@ -2796,7 +3291,7 @@ export default class TephrameshPlugin extends Plugin {
     if (instance.setupState === "pending") {
       throw new Error("Complete this instance's setup before pausing its folder.");
     }
-    const apiKey = this.getApiKey(instance.id);
+    const apiKey = this.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
     if (!apiKey) {
       throw new Error("API key is unavailable in the encrypted configuration");
     }

@@ -224,6 +224,24 @@ async function verifyValue(
   }
 }
 
+/** Sign application data with an enrolled installation's existing P-256 key. */
+export async function signCanonicalValue(
+  value: unknown,
+  signer: LocalDeviceSigningRecord,
+): Promise<string> {
+  await assertSigningKeyPair(signer);
+  return signValue(value, signer.privateKey);
+}
+
+/** Verify application data without exposing key import details to callers. */
+export async function verifyCanonicalValue(
+  value: unknown,
+  signature: string,
+  publicKey: string,
+): Promise<boolean> {
+  return verifyValue(value, signature, publicKey);
+}
+
 async function assertSigningKeyPair(keys: SigningKeyPairExport): Promise<void> {
   if (await signingKeyId(keys.publicKey) !== keys.keyId) {
     throw new Error("The local signing public key has the wrong identifier.");
@@ -752,6 +770,28 @@ export async function verifyEnrollmentApproval(
     throw new Error("The approval does not enroll this installation's signing key.");
   }
   assertRequestEnrollment(approval.request, approval.enrollments);
+}
+
+export function applyEnrollmentApprovalToLocalSigningRecord(
+  pending: LocalDeviceSigningRecord,
+  approval: DeviceEnrollmentApproval,
+): LocalDeviceSigningRecord {
+  if (!pending.pendingRequest ||
+      canonicalJson(pending.pendingRequest) !== canonicalJson(approval.request) ||
+      approval.request.keyId !== pending.keyId ||
+      approval.request.publicKey !== pending.publicKey) {
+    throw new Error("This approval does not match this installation's request.");
+  }
+  return {
+    ...pending,
+    rootKeyId: approval.rootKeyId,
+    pendingRequest: undefined,
+    pendingApproval: approval,
+    lastAcceptedRevision: approval.approvedRevision,
+    lastAcceptedEnvelopeHash: approval.approvedEnvelopeHash,
+    lastAcceptedEnrollmentKeyIds: approval.enrollments.map((enrollment) => enrollment.keyId),
+    lastAcceptedRevokedEnrollmentKeyIds: [],
+  };
 }
 
 function assertRequestEnrollment(
