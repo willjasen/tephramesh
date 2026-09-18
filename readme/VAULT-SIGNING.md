@@ -1,4 +1,4 @@
-# Vault file signing
+# Vault file signing and encryption
 
 Vault file signing proves which enrolled Tephramesh installation signed a
 specific version of a file. It is separate from plugin-configuration signing:
@@ -7,10 +7,39 @@ specific version of a file. It is separate from plugin-configuration signing:
   Tephramesh configuration.
 - **Vault file signing** records authorship for vault content. It does not
   authorize configuration changes and it does not encrypt the file.
+- **Vault file encryption** stores the file as an age-encrypted `.age` sibling.
+  Encryption automatically signs the ciphertext before the plaintext is
+  removed from the vault.
 
-The signed file remains ordinary vault content. The signature is stored beside
-it in Tephramesh's hidden signature directory so the file can still be opened,
-edited, and synchronized normally.
+The signature is stored beside the file in Tephramesh's hidden signature
+directory. Plain signed files remain ordinary vault content. Encrypted files
+are synchronized as ciphertext and must be decrypted before they can be opened
+or edited in Obsidian.
+
+## File-menu actions
+
+Right-click a vault file to access the signing and encryption actions. Signing
+is available for any file that is not inside `.obsidian` or Tephramesh's own
+`.tephramesh` directory. Encryption is available when the local installation
+is unlocked and enrolled:
+
+1. **Encrypt vault file** creates `File.ext.age`, signs its ciphertext, and
+  removes the plaintext `File.ext`.
+2. Syncthing distributes the `.age` file and its signature record normally.
+3. Opening the `.age` file uses Tephramesh's encrypted-file editor. It verifies
+  the ciphertext and decrypts it only in memory, so the file remains editable
+  without writing plaintext to disk.
+4. Saving the editor re-encrypts the updated text, signs the new ciphertext,
+  and writes only the encrypted bytes back to the `.age` file.
+5. **Decrypt vault file** remains available when a plaintext copy is needed;
+  it verifies the ciphertext, restores `File.ext`, and removes the `.age`
+  file and its signature.
+
+Encryption therefore implies signing. A ciphertext with no valid signature is
+not decrypted by the file-menu action. The encrypted-file editor handles
+`.age` files as a custom Obsidian view rather than exposing ciphertext to the
+normal Markdown editor. **Decrypt current vault file** remains available from
+the command palette when a plaintext copy is explicitly wanted.
 
 ## Current scope
 
@@ -58,8 +87,10 @@ content hash and is stored under:
 ```
 
 Because the content hash is part of the filename, different signed versions do
-not overwrite one another. This also leaves an immutable local history of
-signed versions, subject to normal vault synchronization and file cleanup.
+not overwrite one another. Tephramesh retains the five newest valid signature
+records per vault path. Older records are removed after a new local signature
+is written; malformed records are left in place for inspection rather than
+being deleted automatically.
 
 ## Signing an edit
 
@@ -123,7 +154,6 @@ The private signing key remains in the local Obsidian Keychain. Public
 but private keys, API keys, age identities, and encrypted configuration
 secrets do not belong in a vault signature record.
 
-The current command targets Markdown notes. The record format hashes arbitrary
-file bytes, so the same verification model can support attachments and other
-vault files later, provided the UI and local-authorship rules are extended for
-those file types.
+The editor automatically re-signs direct edits to Markdown notes. Other file
+types can be signed from the file menu, but changing them does not currently
+trigger automatic re-signing; they must be signed again from the file menu.

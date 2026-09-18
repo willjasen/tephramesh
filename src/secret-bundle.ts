@@ -128,3 +128,21 @@ export async function decryptProtectedData(
   }
   return parsed as TephrameshProtectedData;
 }
+
+export async function encryptVaultContent(
+  recipient: string,
+  content: ArrayBuffer,
+): Promise<ArrayBuffer> {
+  const encrypter = new Encrypter();
+  encrypter.addRecipient(recipient.trim());
+  return (await encrypter.encrypt(new Uint8Array(content))).buffer as ArrayBuffer;
+}
+
+export async function decryptVaultContent(
+  identity: string,
+  ciphertext: ArrayBuffer,
+): Promise<ArrayBuffer> {
+  const decrypter = new Decrypter();
+  decrypter.addIdentity(identity.trim());
+  return (await decrypter.decrypt(new Uint8Array(ciphertext))).buffer as ArrayBuffer;
+}

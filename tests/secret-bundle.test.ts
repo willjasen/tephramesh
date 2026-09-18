@@ -6,6 +6,8 @@ import {
   emptySecrets,
   encryptSecrets,
   encryptProtectedData,
+  decryptVaultContent,
+  encryptVaultContent,
   generatePostQuantumAgeKeyPair,
   validateAgeKeyPair,
 } from "../src/secret-bundle";
@@ -77,5 +79,12 @@ describe("age-encrypted secret bundle", () => {
       protectedData,
     );
     expect(protectedData.settings).not.toHaveProperty("schemaVersion");
+  });
+
+  it("round trips arbitrary vault file bytes through age", async () => {
+    const content = new Uint8Array([0, 1, 2, 127, 128, 255]).buffer;
+    const encrypted = await encryptVaultContent(recipient, content);
+    expect(new Uint8Array(encrypted)).not.toEqual(new Uint8Array(content));
+    await expect(decryptVaultContent(identity, encrypted)).resolves.toEqual(content);
   });
 });

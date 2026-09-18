@@ -22,6 +22,7 @@ import {
   pendingNoteMissingHostsForThreshold,
 } from "./note-sync";
 import { notePartialScanPath } from "./note-scan";
+import { EncryptedFileView } from "./encrypted-file-view";
 import {
   inspectReconciliationSnapshot,
   repairBlockedReasons,
@@ -33,7 +34,9 @@ import {
   AGE_IDENTITY_SECRET_NAME,
   decryptProtectedData,
   decryptSecrets,
+  decryptVaultContent,
   emptySecrets,
+  encryptVaultContent,
   type TephrameshSecrets,
   type TephrameshProtectedData,
   validateAgeKeyPair,
@@ -197,6 +200,7 @@ export default class TephrameshPlugin extends Plugin {
   private static readonly REMOTE_CONFIG_SCAN_DELAY_MS = 3_000;
   private static readonly NOTE_SCAN_DEBOUNCE_MS = 500;
   private static readonly CONTENT_SIGNING_SETTLE_WINDOW_MS = 5_000;
+  private static readonly CONTENT_SIGNATURE_RETENTION = 5;
 
   /**
    * Supported automation surface for Obsidian CLI `eval`. It intentionally
@@ -228,6 +232,11 @@ export default class TephrameshPlugin extends Plugin {
     this.contentSigningStatusItem = this.addStatusBarItem();
     this.contentSigningStatusItem.addClass("tephramesh-content-signing-status");
     this.contentSigningStatusItem.hide();
+    this.registerView(
+      EncryptedFileView.VIEW_TYPE,
+      (leaf) => new EncryptedFileView(leaf, this),
+    );
+    this.registerExtensions(["age"], EncryptedFileView.VIEW_TYPE);
     this.addCommand({
       id: "refresh-syncthing-status",
       name: "Refresh Syncthing status",
@@ -256,6 +265,41 @@ export default class TephrameshPlugin extends Plugin {
         return true;
       },
     });
+    this.addCommand({
+      id: "decrypt-current-vault-file",
+      name: "Decrypt current vault file",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || !file.path.endsWith(".age") || !this.canDecryptVaultContent()) return false;
+        if (!checking) void this.decryptVaultFile(file);
+        return true;
+      },
+    });
+    this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
+      if (!("extension" in file)) return;
+      const vaultFile = file as TFile;
+      if (isContentSignaturePath(vaultFile.path) || vaultFile.path === ".obsidian" || vaultFile.path.startsWith(".obsidian/")) return;
+      menu.addItem((item) => {
+        item
+          .setTitle("Toggle signing")
+          .setIcon("signature")
+          .setDisabled(!this.canSignVaultContent())
+          .onClick(() => void this.toggleContentSigning(vaultFile));
+      });
+      if (vaultFile.path.endsWith(".age")) {
+        menu.addItem((item) => item
+          .setTitle("Decrypt vault file")
+          .setIcon("unlock")
+          .setDisabled(!this.canDecryptVaultContent())
+          .onClick(() => void this.decryptVaultFile(vaultFile)));
+      } else {
+        menu.addItem((item) => item
+          .setTitle("Encrypt vault file")
+          .setIcon("lock")
+          .setDisabled(!this.canEncryptVaultContent())
+          .onClick(() => void this.encryptVaultFile(vaultFile)));
+      }
+    }));
     this.registerEditorExtension(EditorView.updateListener.of((update) => {
       if (!hasLocalContentChange(update.transactions)) return;
       const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -686,8 +730,36 @@ export default class TephrameshPlugin extends Plugin {
       await contentSignaturePath(file.path, record.contentHash),
       JSON.stringify(record, null, 2),
     );
+    await this.pruneContentSignatures(file.path);
     if (this.app.workspace.getActiveFile()?.path === file.path) {
       await this.refreshContentSigningStatus();
+    }
+  }
+
+  private async pruneContentSignatures(path: string): Promise<void> {
+    const directory = CONTENT_SIGNATURE_DIRECTORY;
+    if (!(await this.app.vault.adapter.exists(directory))) return;
+    const listing = await this.app.vault.adapter.list(directory);
+    const records: Array<{ path: string; record: ContentSignatureRecord }> = [];
+    for (const recordPath of listing.files) {
+      if (!recordPath.endsWith(".json")) continue;
+      try {
+        const record = JSON.parse(await this.app.vault.adapter.read(recordPath)) as Partial<ContentSignatureRecord>;
+        if (record.format !== "tephramesh-content-signature-v1" ||
+            record.path !== path ||
+            typeof record.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(record.contentHash) ||
+            typeof record.signedAt !== "string" || !Number.isFinite(Date.parse(record.signedAt))) continue;
+        records.push({ path: recordPath, record: record as ContentSignatureRecord });
+      } catch {
+        // Leave malformed or unrelated synchronized records for inspection.
+      }
+    }
+    records.sort((left, right) => {
+      const timestampDifference = Date.parse(right.record.signedAt) - Date.parse(left.record.signedAt);
+      return timestampDifference || right.path.localeCompare(left.path);
+    });
+    for (const entry of records.slice(TephrameshPlugin.CONTENT_SIGNATURE_RETENTION)) {
+      await this.app.vault.adapter.remove(entry.path);
     }
   }
 
@@ -697,6 +769,92 @@ export default class TephrameshPlugin extends Plugin {
       showTephrameshNotice("success", "Note signing enabled", "Tephramesh will sign local edits to this note.");
     } catch (error) {
       showTephrameshNotice("error", "Could not enable note signing", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private async toggleContentSigning(file: TFile): Promise<void> {
+    try {
+      if (await this.findContentSignatureForPath(file.path)) {
+        await this.disableContentSigning(file);
+      } else {
+        await this.enableContentSigning(file);
+      }
+    } catch (error) {
+      showTephrameshNotice("error", "Could not toggle file signing", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private canEncryptVaultContent(): boolean {
+    return Boolean(this.settings.ageRecipient && this.app.secretStorage.getSecret(AGE_IDENTITY_SECRET_NAME)) &&
+      this.canSignVaultContent();
+  }
+
+  private canDecryptVaultContent(): boolean {
+    return Boolean(this.app.secretStorage.getSecret(AGE_IDENTITY_SECRET_NAME)) && this.canSignVaultContent();
+  }
+
+  private async encryptVaultFile(file: TFile): Promise<void> {
+    try {
+      if (!this.canEncryptVaultContent()) throw new Error("Unlock Tephramesh and enroll this installation before encrypting vault files.");
+      if (file.path.endsWith(".age")) throw new Error("That file is already age-encrypted.");
+      const encryptedPath = `${file.path}.age`;
+      if (await this.app.vault.adapter.exists(encryptedPath)) throw new Error("An encrypted copy already exists.");
+      const plaintext = await this.app.vault.readBinary(file);
+      const ciphertext = await encryptVaultContent(this.settings.ageRecipient, plaintext);
+      const encryptedFile = await this.app.vault.createBinary(encryptedPath, ciphertext);
+      await this.writeContentSignature(encryptedFile);
+      await this.app.vault.delete(file);
+      showTephrameshNotice("success", "Vault file encrypted", `${encryptedPath} is signed and ready to synchronize.`);
+    } catch (error) {
+      showTephrameshNotice("error", "Could not encrypt vault file", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async decryptEncryptedFile(file: TFile): Promise<string> {
+    if (!this.canDecryptVaultContent()) {
+      throw new Error("Unlock Tephramesh and enroll this installation before decrypting vault files.");
+    }
+    if (!file.path.endsWith(".age")) throw new Error("That file is not an age-encrypted vault file.");
+    const identity = this.app.secretStorage.getSecret(AGE_IDENTITY_SECRET_NAME);
+    if (!identity) throw new Error("The local age identity is unavailable.");
+    const ciphertext = await this.app.vault.readBinary(file);
+    const signature = await this.readContentSignature(file);
+    if (!signature) throw new Error("The encrypted file has no signature.");
+    await verifyContentSignature(
+      signature,
+      file.path,
+      ciphertext,
+      this.signingRootKeyId,
+      this.signingEnrollments,
+      this.signingRevokedEnrollmentKeyIds,
+    );
+    const plaintext = await decryptVaultContent(identity, ciphertext);
+    return new TextDecoder().decode(plaintext);
+  }
+
+  async saveEncryptedFile(file: TFile, plaintext: string): Promise<void> {
+    if (!this.canEncryptVaultContent()) {
+      throw new Error("Unlock Tephramesh and enroll this installation before encrypting vault files.");
+    }
+    const ciphertext = await encryptVaultContent(
+      this.settings.ageRecipient,
+      new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
+    );
+    await this.app.vault.modifyBinary(file, ciphertext);
+    await this.writeContentSignature(file);
+  }
+
+  private async decryptVaultFile(file: TFile): Promise<void> {
+    try {
+      const plaintext = new TextEncoder().encode(await this.decryptEncryptedFile(file)).buffer as ArrayBuffer;
+      const plaintextPath = file.path.slice(0, -".age".length);
+      if (await this.app.vault.adapter.exists(plaintextPath)) throw new Error("The plaintext destination already exists.");
+      await this.app.vault.createBinary(plaintextPath, plaintext);
+      await this.removeContentSignature(file.path);
+      await this.app.vault.delete(file);
+      showTephrameshNotice("success", "Vault file decrypted", `${plaintextPath} is restored as a plaintext vault file.`);
+    } catch (error) {
+      showTephrameshNotice("error", "Could not decrypt vault file", error instanceof Error ? error.message : String(error));
     }
   }
 
