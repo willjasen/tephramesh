@@ -158,7 +158,9 @@ export default class TephrameshPlugin extends Plugin {
   private contentSigningDebounceTimers = new Map<string, number>();
   private contentSigningLocalEdits = new Set<string>();
   private contentSigningStatusTimer?: number;
+  private contentSigningStatusPollTimer?: number;
   private contentSigningStatusPendingUntil = new Map<string, number>();
+  private contentSigningStatusRefreshVersion = 0;
   private pendingNoteScans = new Set<string>();
   private noteScanQueueInProgress = false;
   private readonly debugLogger = new DebugLogger(
@@ -194,6 +196,7 @@ export default class TephrameshPlugin extends Plugin {
   private static readonly LABEL_SYNC_DEBOUNCE_MS = 750;
   private static readonly REMOTE_CONFIG_SCAN_DELAY_MS = 3_000;
   private static readonly NOTE_SCAN_DEBOUNCE_MS = 500;
+  private static readonly CONTENT_SIGNING_SETTLE_WINDOW_MS = 5_000;
 
   /**
    * Supported automation surface for Obsidian CLI `eval`. It intentionally
@@ -268,8 +271,12 @@ export default class TephrameshPlugin extends Plugin {
           this.scheduleContentSigning(file as TFile, true);
         }
         if (isContentSignaturePath(file.path) || this.app.workspace.getActiveFile()?.path === file.path) {
-          if (this.app.workspace.getActiveFile()?.path === file.path) {
-            this.contentSigningStatusPendingUntil.set(file.path, Date.now() + 1_500);
+          const activeFile = this.app.workspace.getActiveFile();
+          if (activeFile?.path === file.path || isContentSignaturePath(file.path)) {
+            this.contentSigningStatusPendingUntil.set(
+              activeFile?.path ?? file.path,
+              Date.now() + TephrameshPlugin.CONTENT_SIGNING_SETTLE_WINDOW_MS,
+            );
           }
           this.scheduleContentSigningStatusRefresh();
         }
@@ -279,7 +286,16 @@ export default class TephrameshPlugin extends Plugin {
           await this.maybeReloadFromExternalPluginData(file.path);
         }
         this.scheduleLocalNoteScan(file.path);
-        if (isContentSignaturePath(file.path)) this.scheduleContentSigningStatusRefresh();
+        if (isContentSignaturePath(file.path)) {
+          const activeFile = this.app.workspace.getActiveFile();
+          if (activeFile) {
+            this.contentSigningStatusPendingUntil.set(
+              activeFile.path,
+              Date.now() + TephrameshPlugin.CONTENT_SIGNING_SETTLE_WINDOW_MS,
+            );
+          }
+          this.scheduleContentSigningStatusRefresh();
+        }
       }));
       this.registerEvent(this.app.vault.on("delete", (file) => {
         this.scheduleLocalNoteScan(file.path);
@@ -303,6 +319,7 @@ export default class TephrameshPlugin extends Plugin {
   onunload(): void {
     this.#secrets = undefined;
     if (this.pollingTimer !== undefined) window.clearInterval(this.pollingTimer);
+    if (this.contentSigningStatusPollTimer !== undefined) window.clearTimeout(this.contentSigningStatusPollTimer);
     if (this.noteSyncTimer !== undefined) window.clearInterval(this.noteSyncTimer);
     if (this.statusBarTimer !== undefined) window.clearInterval(this.statusBarTimer);
     this.fileExplorerObserver?.disconnect();
@@ -723,6 +740,16 @@ export default class TephrameshPlugin extends Plugin {
     }, delay);
   }
 
+  private scheduleContentSigningStatusPoll(): void {
+    if (this.contentSigningStatusPollTimer !== undefined) return;
+    const file = this.app.workspace.getActiveFile();
+    if (!file || file.extension.toLowerCase() !== "md") return;
+    this.contentSigningStatusPollTimer = window.setTimeout(() => {
+      this.contentSigningStatusPollTimer = undefined;
+      void this.refreshContentSigningStatus();
+    }, 1_000);
+  }
+
   private scheduleContentSigning(file: TFile, afterVaultWrite = false): void {
     if (isContentSignaturePath(file.path) || file.path === ".obsidian" || file.path.startsWith(".obsidian/")) return;
     if (!afterVaultWrite) this.contentSigningLocalEdits.add(file.path);
@@ -731,7 +758,7 @@ export default class TephrameshPlugin extends Plugin {
     const timer = window.setTimeout(() => {
       this.contentSigningDebounceTimers.delete(file.path);
       void (async () => {
-        if (!(await this.readContentSignature(file))) {
+        if (!(await this.findContentSignatureForPath(file.path))) {
           this.contentSigningLocalEdits.delete(file.path);
           return;
         }
@@ -793,6 +820,8 @@ export default class TephrameshPlugin extends Plugin {
   private async refreshContentSigningStatus(): Promise<void> {
     const item = this.contentSigningStatusItem;
     if (!item) return;
+    this.scheduleContentSigningStatusPoll();
+    const refreshVersion = ++this.contentSigningStatusRefreshVersion;
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       item.hide();
@@ -800,6 +829,8 @@ export default class TephrameshPlugin extends Plugin {
     }
     const content = await this.app.vault.readBinary(file);
     const record = await this.readContentSignature(file);
+    if (refreshVersion !== this.contentSigningStatusRefreshVersion ||
+        this.app.workspace.getActiveFile()?.path !== file.path) return;
     const pendingUntil = this.contentSigningStatusPendingUntil.get(file.path) ?? 0;
     if (pendingUntil > Date.now()) {
       const label = "Updating note signature…";
@@ -836,6 +867,8 @@ export default class TephrameshPlugin extends Plugin {
         this.signingEnrollments,
         this.signingRevokedEnrollmentKeyIds,
       );
+      if (refreshVersion !== this.contentSigningStatusRefreshVersion ||
+          this.app.workspace.getActiveFile()?.path !== file.path) return;
       const label = `Note last signed by ${this.contentSignerName(verified)}`;
       item.setText(label);
       item.setAttribute("aria-label", label);
@@ -843,6 +876,8 @@ export default class TephrameshPlugin extends Plugin {
       item.removeClass("is-invalid");
       item.removeClass("is-pending");
     } catch (error) {
+      if (refreshVersion !== this.contentSigningStatusRefreshVersion ||
+          this.app.workspace.getActiveFile()?.path !== file.path) return;
       const label = "Note signature is missing or invalid";
       item.setText(label);
       item.setAttribute("aria-label", label);

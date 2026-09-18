@@ -2,7 +2,8 @@
 
 Tephramesh device signing authorizes installations to read, change, and accept
 the encrypted Tephramesh configuration. It is separate from Syncthing peer
-trust and from optional vault-note content signing.
+trust and from optional vault-note content signing. See
+[VAULT-SIGNING.md](VAULT-SIGNING.md) for the vault-content signing workflow.
 
 ## What is signed
 
