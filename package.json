@@ -9,7 +9,8 @@
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
     "deploy:test": "./test.sh build",
     "clear:test": "./test.sh clear",
-    "test": "vitest run",
+    "pretest": "test -f node_modules/vitest/vitest.mjs && ! grep -q '/.pnpm/' node_modules/.bin/vitest || npm ci --silent",
+    "test": "node scripts/run-vitest.mjs",
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "keywords": [
