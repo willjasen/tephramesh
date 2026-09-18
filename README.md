@@ -136,7 +136,9 @@ To build and copy the plugin directly into the `Notebox` vault:
 ./test.sh build
 ```
 
-The build option installs locked dependencies, builds the plugin, and copies `main.js`, `manifest.json`, and `styles.css` into the `Notebox` vault. It then disables and re-enables Tephramesh through the Obsidian CLI in Notebox. It does not replace `data.json`, so local Tephramesh settings are preserved. The same command is also available as `npm run deploy:test`.
+The build option installs locked dependencies, builds the plugin, advances the patch version, and copies `main.js`, `manifest.json`, and `styles.css` into the `Notebox` vault. Local deployments therefore progress from `0.2.0` to `0.2.1`, `0.2.2`, and so on. It then disables and re-enables Tephramesh through the Obsidian CLI in Notebox. It does not replace `data.json`, so local Tephramesh settings are preserved. The same command is also available as `npm run deploy:test`.
+
+When a version is ready for BRAT, manually set the source version to the next major or minor stable version, such as `0.3.0`, and synchronize `manifest.json`, `versions.json`, and `package-lock.json`. Subsequent local deployments will then advance that stable version's patch number.
 
 To remove the plugin configuration and repeat onboarding from scratch:
 
