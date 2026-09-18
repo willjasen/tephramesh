@@ -13,6 +13,10 @@ import { endpointUrl, validateEndpoint } from "./security";
 import { buildSyncthingFolder } from "./syncthing-folder";
 import { latestFolderScanProgress } from "./syncthing-scan";
 import {
+  remoteCompletionHasPendingItems,
+  type SyncthingFolderCompletion,
+} from "./syncthing-completion";
+import {
   collectNeededFileNames,
   NEEDED_FILES_PER_PAGE,
 } from "./syncthing-pagination";
@@ -378,6 +382,10 @@ export class SyncthingClient {
     folderId: string,
     deviceId: string,
   ): Promise<string[]> {
+    const completion = await this.request<SyncthingFolderCompletion>(
+      `/rest/db/completion?folder=${encodeURIComponent(folderId)}&device=${encodeURIComponent(deviceId)}`,
+    );
+    if (remoteCompletionHasPendingItems(completion) === false) return [];
     return this.getNeededFileNames(
       (page) =>
         `/rest/db/remoteneed?folder=${encodeURIComponent(folderId)}&device=${encodeURIComponent(deviceId)}&page=${page}&perpage=${NEEDED_FILES_PER_PAGE}`,
