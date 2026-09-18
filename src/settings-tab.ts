@@ -603,7 +603,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   }
 
   private renderConfig(container: HTMLElement): void {
-    const history = this.plugin.getConfigHistory();
+    const history = this.plugin.getConfigHistory(INTERNAL_SECRET_ACCESS);
     const currentVersion = history[0]?.version;
     if (history.length === 0) {
       container.createEl("p", { text: "No saved config versions are available." });
@@ -653,7 +653,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       this.renderDeleteConfig(container);
       return;
     }
-    const config = selectedBlock.config ?? this.plugin.getDecryptedConfig();
+    const config = selectedBlock.config ?? this.plugin.getDecryptedConfig(INTERNAL_SECRET_ACCESS);
     if (!config) {
       container.createEl("p", { text: "Unlock Tephramesh to view the decrypted configuration." });
       this.renderSavedConfigVersions(container);
@@ -1126,6 +1126,34 @@ export class TephrameshSettingTab extends PluginSettingTab {
           cls: "tephramesh-authenticated-marker is-waiting",
         });
       }
+      if (!installation.isLocal && !installation.isEnrollmentRoot) {
+        authenticatedSetting.addButton((button) => button
+          .setButtonText("Revoke")
+          .setWarning()
+          .onClick(async () => {
+            const confirmed = window.confirm(
+              `Revoke ${installation.name} from configuration signing? This will create a new signed configuration revision that drops its trusted enrollment key.`,
+            );
+            if (!confirmed) return;
+            button.setDisabled(true).setButtonText("Revoking…");
+            try {
+              await this.plugin.revokeSigningKey(installation.keyId);
+              this.render();
+              showTephrameshNotice(
+                "success",
+                "Device signing revoked",
+                `${installation.name} was removed from the active configuration-signing set.`,
+              );
+            } catch (error) {
+              showTephrameshNotice(
+                "error",
+                "Revoke failed",
+                error instanceof Error ? error.message : String(error),
+              );
+              button.setDisabled(false).setButtonText("Revoke");
+            }
+          }));
+      }
     });
     new Setting(container)
       .setName("Approve another installation")
@@ -1341,7 +1369,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
       }
       setting.addButton((button) =>
         button.setIcon("pencil").setTooltip("Edit Syncthing URL").onClick(() => {
-          const apiKey = this.plugin.getApiKey(instance.id);
+          const apiKey = this.plugin.getApiKey(INTERNAL_SECRET_ACCESS, instance.id);
           if (!apiKey) {
             showTephrameshNotice(
               "error",
@@ -1511,7 +1539,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
 
   private openInstanceModal(kind: InstanceKind): void {
     if (kind === "shard") {
-      const password = this.plugin.getShardEncryptionKey();
+      const password = this.plugin.getShardEncryptionKey(INTERNAL_SECRET_ACCESS);
       if (!password || validateShardPassword(password)) {
         showTephrameshNotice(
           "warning",
@@ -1676,7 +1704,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
         this.plugin.settings.instances,
         this.plugin.settings.folderId,
         this.plugin.settings.folderLabel,
-        this.plugin.getShardEncryptionKey() ?? "",
+        this.plugin.getShardEncryptionKey(INTERNAL_SECRET_ACCESS) ?? "",
       );
       const activeInstances = activeMeshInstances(this.plugin.settings.instances);
       const operatingInstances = activeInstances.filter(

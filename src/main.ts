@@ -69,6 +69,7 @@ import {
   encodeEnrollmentCode,
   generateSigningKeyPair,
   isSignedConfigEnvelope,
+  revokeEnrollmentKey,
   SignedConfigConflictError,
   sha256Canonical,
   verifyEnrollmentApproval,
@@ -135,6 +136,7 @@ export default class TephrameshPlugin extends Plugin {
   #secrets?: TephrameshSecrets;
   private encryptedData = "";
   private configHistoryBlocks: ConfigHistoryBlock[] = [];
+  private suppressPluginDataReload = false;
   private signingRootKeyId = "";
   private signingEnrollments: DeviceEnrollment[] = [];
   private signingRevokedEnrollmentKeyIds: string[] = [];
@@ -257,7 +259,10 @@ export default class TephrameshPlugin extends Plugin {
       if (view?.file) this.scheduleContentSigning(view.file);
     }));
     this.app.workspace.onLayoutReady(() => {
-      this.registerEvent(this.app.vault.on("modify", (file) => {
+      this.registerEvent(this.app.vault.on("modify", async (file) => {
+        if (file.path === this.pluginDataFilePath()) {
+          await this.maybeReloadFromExternalPluginData(file.path);
+        }
         this.scheduleLocalNoteScan(file.path);
         if ("extension" in file && this.contentSigningLocalEdits.has(file.path)) {
           this.scheduleContentSigning(file as TFile, true);
@@ -269,7 +274,10 @@ export default class TephrameshPlugin extends Plugin {
           this.scheduleContentSigningStatusRefresh();
         }
       }));
-      this.registerEvent(this.app.vault.on("create", (file) => {
+      this.registerEvent(this.app.vault.on("create", async (file) => {
+        if (file.path === this.pluginDataFilePath()) {
+          await this.maybeReloadFromExternalPluginData(file.path);
+        }
         this.scheduleLocalNoteScan(file.path);
         if (isContentSignaturePath(file.path)) this.scheduleContentSigningStatusRefresh();
       }));
@@ -458,11 +466,16 @@ export default class TephrameshPlugin extends Plugin {
         encryptedData,
       );
     }
-    await this.saveData({
-      schemaVersion: 3,
-      ageRecipient,
-      encryptedData,
-    } satisfies EncryptedSettingsEnvelope);
+    this.suppressPluginDataReload = true;
+    try {
+      await this.saveData({
+        schemaVersion: 3,
+        ageRecipient,
+        encryptedData,
+      } satisfies EncryptedSettingsEnvelope);
+    } finally {
+      this.suppressPluginDataReload = false;
+    }
     this.configHistoryBlocks = blocks;
     this.encryptedData = encryptedData;
     if (nextSignedEnvelope && localSigning) {
@@ -489,6 +502,22 @@ export default class TephrameshPlugin extends Plugin {
       }
     }
     this.requestConfigSubpathScans();
+  }
+
+  private pluginDataFilePath(): string {
+    const pluginDirectory = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    return normalizePath(`${pluginDirectory}/data.json`);
+  }
+
+  private async maybeReloadFromExternalPluginData(path: string): Promise<void> {
+    if (this.suppressPluginDataReload || path !== this.pluginDataFilePath()) return;
+    try {
+      const contents = await this.app.vault.adapter.read(path);
+      if (contents === this.encryptedData) return;
+      await this.onExternalSettingsChange();
+    } catch {
+      // The plugin may be resetting or the file may not be readable yet.
+    }
   }
 
   private requestConfigSubpathScans(): void {
@@ -1602,6 +1631,35 @@ export default class TephrameshPlugin extends Plugin {
     this.acceptanceConfirmations.clear();
     this.requestConfigSubpathScans();
     await this.refreshCurrentConfigAcknowledgements(true);
+  }
+
+  async revokeSigningKey(keyId: string): Promise<void> {
+    if (this.signingTrust !== "enrolled" || !this.signingRootKeyId) {
+      throw new Error("This installation is not enrolled for configuration signing.");
+    }
+    const local = this.getLocalSigningRecord();
+    if (!local?.rootKeyId) {
+      throw new Error("This installation is missing its local signing record.");
+    }
+    if (keyId === local.keyId) {
+      throw new Error("The local installation cannot revoke its own signing key.");
+    }
+    const previousEnrollments = structuredClone(this.signingEnrollments);
+    const previousRevocations = [...this.signingRevokedEnrollmentKeyIds];
+    const revoked = revokeEnrollmentKey(
+      previousEnrollments,
+      previousRevocations,
+      keyId,
+    );
+    this.signingEnrollments = revoked.enrollments;
+    this.signingRevokedEnrollmentKeyIds = revoked.revokedEnrollmentKeyIds;
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      this.signingEnrollments = previousEnrollments;
+      this.signingRevokedEnrollmentKeyIds = previousRevocations;
+      throw error;
+    }
   }
 
   async applyEnrollmentCancellation(code: string): Promise<void> {

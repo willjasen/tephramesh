@@ -648,6 +648,28 @@ export function assertEnrollmentMembershipAccepted(
   }
 }
 
+export function revokeEnrollmentKey(
+  enrollments: DeviceEnrollment[],
+  revokedEnrollmentKeyIds: string[] = [],
+  keyId: string,
+): { enrollments: DeviceEnrollment[]; revokedEnrollmentKeyIds: string[] } {
+  if (!keyId) throw new Error("Select an enrolled installation to revoke.");
+  const match = enrollments.find((enrollment) => enrollment.keyId === keyId);
+  if (!match) {
+    throw new Error("That installation is not currently enrolled for configuration signing.");
+  }
+  if (match.approvedByKeyId === match.keyId) {
+    throw new Error("The enrollment root cannot be revoked from the active signing set.");
+  }
+  const active = enrollments.filter((enrollment) => enrollment.keyId !== keyId);
+  const revoked = [...new Set([...revokedEnrollmentKeyIds, keyId])];
+  assertEnrollmentMembership(active, revoked);
+  return {
+    enrollments: active,
+    revokedEnrollmentKeyIds: revoked,
+  };
+}
+
 export function assertSignedRevisionAccepted(
   local: LocalDeviceSigningRecord,
   revision: number,

@@ -20,6 +20,7 @@ import {
   createEnrollmentCancellation,
   createGenesisEnrollment,
   createSignedConfigEnvelope,
+  revokeEnrollmentKey,
   decodeEnrollmentApproval,
   decodeEnrollmentCancellation,
   decodeEnrollmentRequest,
@@ -435,6 +436,34 @@ describe("configuration signing", () => {
       { ...anchored, lastAcceptedEnrollmentKeyIds: [enrollment.keyId], lastAcceptedRevokedEnrollmentKeyIds: [other.keyId] },
       [enrollment], [],
     )).toThrow(/revoked/i);
+  });
+
+  it("revokes an enrolled installation by moving its key from the active set to the revocation list", async () => {
+    const { enrollment: rootEnrollment, local: rootLocal } = await genesis();
+    const otherKeys = await generateSigningKeyPair();
+    const request = createEnrollmentRequest("instance-b", "device-b", otherKeys);
+    const otherEnrollment = await approveEnrollmentRequest(request, rootLocal);
+    const active = [rootEnrollment, otherEnrollment];
+    const revoked = revokeEnrollmentKey(active, [], otherEnrollment.keyId);
+
+    expect(revoked.enrollments.map((enrollment) => enrollment.keyId)).toEqual([rootEnrollment.keyId]);
+    expect(revoked.revokedEnrollmentKeyIds).toEqual([otherEnrollment.keyId]);
+
+    const envelope = await createSignedConfigEnvelope(
+      await history(),
+      revoked.enrollments,
+      rootLocal.keyId,
+      2,
+      rootLocal,
+      revoked.revokedEnrollmentKeyIds,
+    );
+    await expect(verifySignedConfigEnvelope(envelope)).resolves.toMatchObject({
+      envelope: {
+        revision: 2,
+        signerKeyId: rootLocal.keyId,
+        revokedEnrollmentKeyIds: [otherEnrollment.keyId],
+      },
+    });
   });
 
   it("rejects a revoked signer when creating an envelope", async () => {
