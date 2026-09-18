@@ -112,13 +112,31 @@ npm test
 npm run build
 ```
 
-To build and copy the plugin directly into the default `testing` vault:
+## Obsidian CLI
+
+Tephramesh exposes a read-only automation API through Obsidian CLI. Obsidian must be running with the vault open and Tephramesh enabled.
+
+```bash
+# Return the current cached mesh, signing, and reconciliation state.
+obsidian eval code="app.plugins.plugins.tephramesh.cli.state()"
+
+# Run live, read-only checks against every active Syncthing instance.
+obsidian eval code="app.plugins.plugins.tephramesh.cli.test()"
+```
+
+`state()` never polls Syncthing or changes plugin state. `test()` uses only Syncthing GET requests; it does not save configuration, reconcile the mesh, trigger scans, or write acceptance records. Neither result contains API keys, the shard encryption key, endpoint URLs, folder paths, device IDs, signing keys, or decrypted configuration.
+
+The supported `cli` object is frozen and provides no mutation methods. Tephramesh keeps its decrypted secret bundle in a JavaScript private field, and secret-bearing helpers require an internal capability that is not exposed by the CLI API.
+
+Obsidian's developer `eval` command is itself unrestricted, however. A caller with CLI access can execute arbitrary JavaScript inside Obsidian and can attempt to use Obsidian's own application and Keychain APIs directly; no community plugin can sandbox that host capability. Treat enabled Obsidian CLI access as equivalent to local access to the unlocked app, and do not enable it for untrusted OS accounts or automation.
+
+To build and copy the plugin directly into the `Notebox` vault:
 
 ```bash
 ./test.sh build
 ```
 
-The build option installs locked dependencies, builds the plugin, and copies `main.js`, `manifest.json`, and `styles.css` into both the `Notebox` vault and the iCloud-synced `testing` vault at `/Users/willjasen/Library/Mobile Documents/iCloud~md~obsidian/Documents/testing`. It then disables and re-enables Tephramesh through the Obsidian CLI in both vaults. It does not replace `data.json`, so local Tephramesh settings are preserved. The same command is also available as `npm run deploy:test`.
+The build option installs locked dependencies, builds the plugin, and copies `main.js`, `manifest.json`, and `styles.css` into the `Notebox` vault. It then disables and re-enables Tephramesh through the Obsidian CLI in Notebox. It does not replace `data.json`, so local Tephramesh settings are preserved. The same command is also available as `npm run deploy:test`.
 
 To remove the plugin configuration and repeat onboarding from scratch:
 
@@ -127,12 +145,6 @@ To remove the plugin configuration and repeat onboarding from scratch:
 ```
 
 This removes only `.obsidian/plugins/tephramesh/data.json`, then automatically builds and redeploys the current plugin. Unrelated vault data is preserved. The local `tephramesh-age-identity` Keychain entry is stored separately and cannot be removed by the script. Reload Obsidian, or disable and re-enable Tephramesh, before beginning the fresh setup. The same command is available as `npm run clear:test`.
-
-To deploy to a different testing vault instead of the two default destinations without editing the script:
-
-```bash
-TEPHRAMESH_TEST_PLUGIN_DIR="/path/to/vault/.obsidian/plugins/tephramesh" ./test.sh build
-```
 
 The release workflow attaches `main.js`, `manifest.json`, and `styles.css` to version tags, which supports BRAT and matches the artifacts required for an eventual Obsidian community-plugin submission.
 
