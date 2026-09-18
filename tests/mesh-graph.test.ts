@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InstanceRuntimeStatus, MeshInstance } from "../src/model";
-import { createMeshGraph, createSigningGraph } from "../src/mesh-graph";
+import { createConfigSigningGraph, createMeshGraph, createSigningGraph } from "../src/mesh-graph";
 
 const endpoint = { protocol: "https" as const, hostname: "example.com", port: 8384 };
 const instances: MeshInstance[] = [
@@ -99,5 +99,100 @@ describe("mesh graph", () => {
       knowsLocalUpdate: false,
       pending: true,
     });
+  });
+
+  it("creates a full-mesh config-signing graph with pairwise acceptance and acknowledgement state", () => {
+    const graph = createSigningGraph({
+      state: "enrolled",
+      rootKeyId: "root",
+      revision: 2,
+      acceptedCount: 2,
+      acceptanceSeenByCount: 1,
+      enrolledCount: 3,
+      localInstallationName: "MacBook",
+      pendingInstallation: {
+        bindingId: "mesh:tablet",
+        deviceId: "TABLET",
+        keyId: "pending-key",
+        name: "Tablet",
+        source: "mesh",
+      },
+      authenticatedInstallations: [
+        {
+          bindingId: "mesh:mac",
+          deviceId: "MAC",
+          keyId: "root",
+          name: "MacBook",
+          source: "mesh",
+          isLocal: true,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          isEnrollmentRoot: true,
+          acceptedCurrentConfig: true,
+          hasSeenLocalAcceptance: true,
+        },
+        {
+          bindingId: "mesh:phone",
+          deviceId: "PHONE",
+          keyId: "phone-key",
+          name: "Phone",
+          source: "mesh",
+          isLocal: false,
+          createdAt: "2024-01-02T00:00:00.000Z",
+          approvedByName: "MacBook",
+          isEnrollmentRoot: false,
+          acceptedCurrentConfig: true,
+          hasSeenLocalAcceptance: false,
+        },
+      ],
+    });
+
+    const configGraph = createConfigSigningGraph({
+      state: "enrolled",
+      rootKeyId: "root",
+      revision: 2,
+      acceptedCount: 2,
+      acceptanceSeenByCount: 1,
+      enrolledCount: 3,
+      localInstallationName: "MacBook",
+      pendingInstallation: {
+        bindingId: "mesh:tablet",
+        deviceId: "TABLET",
+        keyId: "pending-key",
+        name: "Tablet",
+        source: "mesh",
+      },
+      authenticatedInstallations: [
+        {
+          bindingId: "mesh:mac",
+          deviceId: "MAC",
+          keyId: "root",
+          name: "MacBook",
+          source: "mesh",
+          isLocal: true,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          isEnrollmentRoot: true,
+          acceptedCurrentConfig: true,
+          hasSeenLocalAcceptance: true,
+        },
+        {
+          bindingId: "mesh:phone",
+          deviceId: "PHONE",
+          keyId: "phone-key",
+          name: "Phone",
+          source: "mesh",
+          isLocal: false,
+          createdAt: "2024-01-02T00:00:00.000Z",
+          approvedByName: "MacBook",
+          isEnrollmentRoot: false,
+          acceptedCurrentConfig: true,
+          hasSeenLocalAcceptance: false,
+        },
+      ],
+    });
+
+    expect(configGraph.nodes).toHaveLength(3);
+    expect(configGraph.links).toHaveLength(3);
+    expect(configGraph.links.some((link) => link.state === "rooted" && link.source.name === "MacBook" && link.target.name === "Phone")).toBe(true);
+    expect(configGraph.links.some((link) => link.state === "pending" && link.source.name === "Phone" && link.target.name === "Tablet")).toBe(true);
   });
 });
