@@ -33,13 +33,16 @@ import { operatingSystemPresentation } from "./platform";
 import { RestoreConfigVersionModal } from "./restore-config-version-modal";
 import { ResolveConfigConflictModal } from "./resolve-config-conflict-modal";
 import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
+import { INTERNAL_SECRET_ACCESS } from "./internal-access";
 import { ApproveEnrollmentModal } from "./approve-enrollment-modal";
 import { renderDeviceAvatar } from "./device-avatar";
+import { createMeshGraph } from "./mesh-graph";
 
-type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology";
+type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology" | "graph";
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "topology", label: "Topology" },
+  { id: "graph", label: "Graph" },
   { id: "instances", label: "Instances" },
   { id: "vault", label: "Vault" },
   { id: "config", label: "Config" },
@@ -57,6 +60,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private topologyTabIndicator?: HTMLElement;
   private instancesTabIndicator?: HTMLElement;
   private reconciliationElement?: HTMLElement;
+  private graphElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
   private visible = false;
   private configRevealed = false;
@@ -110,6 +114,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     this.topologyTabIndicator = undefined;
     this.instancesTabIndicator = undefined;
     this.reconciliationElement = undefined;
+    this.graphElement = undefined;
     containerEl.createEl("h1", { text: "Tephramesh" });
 
     if (!this.plugin.hasEncryptionConfigured()) {
@@ -248,6 +253,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     }
     this.updateInstancesTabIndicator(statuses);
     this.updateTopology();
+    this.updateGraph();
   }
 
   refreshReconciliationReport(): void {
@@ -377,7 +383,98 @@ export class TephrameshSettingTab extends PluginSettingTab {
       case "topology":
         this.renderTopology(sectionContainer);
         break;
+      case "graph":
+        this.renderGraph(sectionContainer);
+        break;
     }
+  }
+
+  private renderGraph(container: HTMLElement): void {
+    this.graphElement = container.createDiv({ cls: "tephramesh-mesh-graph" });
+    this.updateGraph();
+  }
+
+  private updateGraph(): void {
+    if (!this.graphElement) return;
+    const container = this.graphElement;
+    container.empty();
+    const graph = createMeshGraph(
+      this.plugin.settings.instances,
+      this.plugin.runtimeStatuses,
+      this.plugin.settings.offlineTimeoutSeconds,
+    );
+    const heading = container.createDiv({ cls: "tephramesh-mesh-graph-heading" });
+    heading.createEl("h3", { text: "Mesh connections" });
+    heading.createSpan({
+      text: `${graph.nodes.length} ${graph.nodes.length === 1 ? "host" : "hosts"} · ${graph.links.length} ${graph.links.length === 1 ? "link" : "links"}`,
+    });
+    if (graph.nodes.length === 0) {
+      container.createDiv({ cls: "tephramesh-mesh-graph-empty", text: "Add a Device to begin the mesh." });
+      return;
+    }
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", `Complete mesh graph with ${graph.nodes.length} hosts and ${graph.links.length} configured links.`);
+    svg.classList.add("tephramesh-mesh-graph-svg");
+    for (const link of graph.links) {
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(link.source.x));
+      line.setAttribute("y1", String(link.source.y));
+      line.setAttribute("x2", String(link.target.x));
+      line.setAttribute("y2", String(link.target.y));
+      line.setAttribute("class", `tephramesh-mesh-graph-link is-${link.state}`);
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `${link.source.instance.name} ↔ ${link.target.instance.name}: ${link.state === "unknown" ? "not reported" : link.state}`;
+      line.appendChild(title);
+      svg.appendChild(line);
+    }
+    for (const node of graph.nodes) {
+      const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      const status = instanceIndicatorState(
+        node.instance,
+        this.plugin.runtimeStatuses.get(node.instance.id),
+        this.plugin.settings.offlineTimeoutSeconds,
+      );
+      group.setAttribute("class", `tephramesh-mesh-graph-node is-${node.instance.kind} is-${status}`);
+      group.setAttribute("transform", `translate(${node.x} ${node.y})`);
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `${node.instance.name} · ${node.instance.kind} · ${status}`;
+      group.appendChild(title);
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("r", "9");
+      group.appendChild(circle);
+      const name = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      name.setAttribute("class", "tephramesh-mesh-graph-node-name");
+      name.setAttribute("text-anchor", "middle");
+      name.setAttribute("y", "-0.5");
+      name.textContent = node.instance.name.length > 13 ? `${node.instance.name.slice(0, 12)}…` : node.instance.name;
+      group.appendChild(name);
+      const role = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      role.setAttribute("class", "tephramesh-mesh-graph-node-role");
+      role.setAttribute("text-anchor", "middle");
+      role.setAttribute("y", "3.5");
+      role.textContent = node.instance.kind;
+      group.appendChild(role);
+      svg.appendChild(group);
+    }
+    container.appendChild(svg);
+
+    const legend = container.createDiv({ cls: "tephramesh-mesh-graph-legend" });
+    for (const [state, label] of [
+      ["connected", "Connected"],
+      ["disconnected", "Disconnected"],
+      ["unknown", "Not reported"],
+    ] as const) {
+      const item = legend.createSpan();
+      item.createSpan({ cls: `tephramesh-mesh-graph-legend-line is-${state}` });
+      item.appendText(label);
+    }
+    container.createDiv({
+      cls: "tephramesh-mesh-graph-note",
+      text: "Solid links are reported by a Device. Shard-to-shard links remain dashed because Shards are not used as API query sources.",
+    });
   }
 
   private renderMesh(container: HTMLElement): void {

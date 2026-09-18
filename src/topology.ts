@@ -20,6 +20,7 @@ export function meshStatusBarPresentation(
   instances: MeshInstance[],
   statuses: ReadonlyMap<string, InstanceRuntimeStatus>,
   timeoutSeconds: number,
+  now = Date.now(),
 ): MeshStatusBarPresentation {
   if (instances.length === 0) {
     return { state: "warning", label: "Tephramesh: setup required" };
@@ -27,7 +28,7 @@ export function meshStatusBarPresentation(
 
   const unavailable = instances.filter((instance) => {
     const status = statuses.get(instance.id);
-    return Boolean(status && !isRuntimeStatusFresh(status, timeoutSeconds));
+    return Boolean(status && !isRuntimeStatusFresh(status, timeoutSeconds, now));
   });
   if (unavailable.length > 0) {
     return {

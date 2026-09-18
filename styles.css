@@ -635,6 +635,135 @@ button.tephramesh-approve-button:hover {
   margin: var(--size-4-2) 0 0;
 }
 
+.tephramesh-mesh-graph {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-4);
+}
+
+.tephramesh-mesh-graph-heading {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+}
+
+.tephramesh-mesh-graph-heading h3 {
+  margin: 0;
+}
+
+.tephramesh-mesh-graph-heading span,
+.tephramesh-mesh-graph-note,
+.tephramesh-mesh-graph-empty {
+  color: var(--text-muted);
+}
+
+.tephramesh-mesh-graph-svg {
+  display: block;
+  margin: var(--size-4-3) auto;
+  max-height: 34rem;
+  overflow: visible;
+  width: min(100%, 42rem);
+}
+
+.tephramesh-mesh-graph-link {
+  stroke-linecap: round;
+  stroke-width: 1.15;
+  vector-effect: non-scaling-stroke;
+}
+
+.tephramesh-mesh-graph-link.is-connected {
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--text-success) 55%, transparent));
+  stroke: var(--text-success);
+}
+
+.tephramesh-mesh-graph-link.is-disconnected {
+  stroke: var(--text-error);
+}
+
+.tephramesh-mesh-graph-link.is-unknown {
+  stroke: var(--text-faint);
+  stroke-dasharray: 4 3;
+}
+
+.tephramesh-mesh-graph-node circle {
+  fill: var(--background-primary);
+  stroke: var(--text-success);
+  stroke-width: 0.65;
+  vector-effect: non-scaling-stroke;
+}
+
+.tephramesh-mesh-graph-node.is-shard circle {
+  fill: color-mix(in srgb, var(--color-orange) 10%, var(--background-primary));
+}
+
+.tephramesh-mesh-graph-node.is-scanning circle,
+.tephramesh-mesh-graph-node.is-syncing circle {
+  stroke: var(--color-blue, #59c2ff);
+}
+
+.tephramesh-mesh-graph-node.is-warning circle {
+  stroke: var(--text-warning);
+}
+
+.tephramesh-mesh-graph-node.is-unavailable circle {
+  stroke: var(--text-error);
+}
+
+.tephramesh-mesh-graph-node text {
+  fill: var(--text-normal);
+  pointer-events: none;
+}
+
+.tephramesh-mesh-graph-node-name {
+  font-size: 3px;
+  font-weight: var(--font-semibold);
+}
+
+.tephramesh-mesh-graph-node-role {
+  fill: var(--text-muted) !important;
+  font-size: 2.2px;
+  text-transform: capitalize;
+}
+
+.tephramesh-mesh-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-3);
+  margin-top: var(--size-4-2);
+}
+
+.tephramesh-mesh-graph-legend > span {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: var(--font-ui-smaller);
+  gap: var(--size-4-1);
+}
+
+.tephramesh-mesh-graph-legend-line {
+  border-top: 2px solid var(--text-faint);
+  display: inline-block;
+  width: 1.25rem;
+}
+
+.tephramesh-mesh-graph-legend-line.is-connected {
+  border-color: var(--text-success);
+}
+
+.tephramesh-mesh-graph-legend-line.is-disconnected {
+  border-color: var(--text-error);
+}
+
+.tephramesh-mesh-graph-legend-line.is-unknown {
+  border-top-style: dashed;
+}
+
+.tephramesh-mesh-graph-note {
+  font-size: var(--font-ui-smaller);
+  margin-top: var(--size-4-3);
+}
+
 @media (max-width: 500px) {
   .tephramesh-topology-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
