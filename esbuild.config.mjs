@@ -9,7 +9,9 @@ const context = await esbuild.context({
   },
   entryPoints: ["src/main.ts"],
   bundle: true,
-  external: ["obsidian", "electron", ...builtinModules],
+  // Obsidian owns these runtime singletons. Bundling another CodeMirror copy
+  // makes its extension objects fail Obsidian's instanceof checks.
+  external: ["obsidian", "electron", "@codemirror/state", "@codemirror/view", ...builtinModules],
   format: "cjs",
   target: "es2021",
   logLevel: "info",

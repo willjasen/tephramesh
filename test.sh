@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 
-# Build, deploy, or clear Tephramesh in the testing vault.
-# Override the destination for another vault with:
-# TEPHRAMESH_TEST_PLUGIN_DIR="/path/to/vault/.obsidian/plugins/tephramesh" ./test.sh build
+# Build, deploy, or clear Tephramesh in the Notebox vault.
 
 set -euo pipefail
 
@@ -30,21 +28,15 @@ step() { printf '%s%s%s\n' "$BOLD" "$*" "$RESET"; }
 
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_PLUGIN_DIR="/Users/willjasen/AppData/Syncthing/Notebox/.obsidian/plugins/tephramesh"
-ICLOUD_PLUGIN_DIR="/Users/willjasen/Library/Mobile Documents/iCloud~md~obsidian/Documents/testing/.obsidian/plugins/tephramesh"
-PLUGIN_DIRS=()
-if [[ -n "${TEPHRAMESH_TEST_PLUGIN_DIR:-}" ]]; then
-  PLUGIN_DIRS+=("${TEPHRAMESH_TEST_PLUGIN_DIR%/}")
-else
-  PLUGIN_DIRS=("$DEFAULT_PLUGIN_DIR" "$ICLOUD_PLUGIN_DIR")
-fi
-VAULT_NAMES=("Notebox" "testing")
+PLUGIN_DIR="$DEFAULT_PLUGIN_DIR"
+VAULT_NAME="Notebox"
 OBSIDIAN_CLI="${OBSIDIAN_CLI:-/Applications/Obsidian.app/Contents/MacOS/obsidian-cli}"
 FILES=("main.js" "manifest.json" "styles.css")
 
 usage() {
   echo "Usage: ./test.sh <build|clear>"
   echo
-  echo "  build  Install dependencies, build Tephramesh, and copy it to the testing vault."
+  echo "  build  Install dependencies, build Tephramesh, and copy it to Notebox."
   echo "  clear  Remove Tephramesh's data.json, then build and redeploy the plugin."
 }
 
@@ -79,41 +71,35 @@ build_plugin() {
     pnpm run build
   fi
 
-  for plugin_dir in "${PLUGIN_DIRS[@]}"; do
-    PLUGIN_DIR="$plugin_dir"
-    validate_plugin_dir
-    if [[ -d "$PLUGIN_DIR" ]]; then
-      info "Plugin directory already exists: $PLUGIN_DIR"
-    else
-      info "Creating plugin directory: $PLUGIN_DIR"
-      mkdir -p "$PLUGIN_DIR"
-    fi
+  validate_plugin_dir
+  if [[ -d "$PLUGIN_DIR" ]]; then
+    info "Plugin directory already exists: $PLUGIN_DIR"
+  else
+    info "Creating plugin directory: $PLUGIN_DIR"
+    mkdir -p "$PLUGIN_DIR"
+  fi
 
-    for file in "${FILES[@]}"; do
-      if [[ ! -f "$SOURCE_DIR/$file" ]]; then
-        error "Build output is missing: $SOURCE_DIR/$file"
-        exit 1
-      fi
-      info "Copying $file to $PLUGIN_DIR"
-      cp "$SOURCE_DIR/$file" "$PLUGIN_DIR/$file"
-    done
+  for file in "${FILES[@]}"; do
+    if [[ ! -f "$SOURCE_DIR/$file" ]]; then
+      error "Build output is missing: $SOURCE_DIR/$file"
+      exit 1
+    fi
+    info "Copying $file to $PLUGIN_DIR"
+    cp "$SOURCE_DIR/$file" "$PLUGIN_DIR/$file"
   done
 
-  success "Tephramesh was copied to: ${PLUGIN_DIRS[*]}"
+  success "Tephramesh was copied to: $PLUGIN_DIR"
   if [[ ! -x "$OBSIDIAN_CLI" ]]; then
     error "Obsidian CLI was not found or is not executable: $OBSIDIAN_CLI"
     exit 1
   fi
-  for vault_name in "${VAULT_NAMES[@]}"; do
-    step "Reloading Tephramesh in the $vault_name vault..."
-    "$OBSIDIAN_CLI" "vault=$vault_name" plugin:disable id=tephramesh filter=community
-    "$OBSIDIAN_CLI" "vault=$vault_name" plugin:enable id=tephramesh filter=community
-    success "Tephramesh was disabled and re-enabled in the $vault_name vault."
-  done
+  step "Reloading Tephramesh in the $VAULT_NAME vault..."
+  "$OBSIDIAN_CLI" "vault=$VAULT_NAME" plugin:disable id=tephramesh filter=community
+  "$OBSIDIAN_CLI" "vault=$VAULT_NAME" plugin:enable id=tephramesh filter=community
+  success "Tephramesh was disabled and re-enabled in the $VAULT_NAME vault."
 }
 
 clear_config() {
-  PLUGIN_DIR="${PLUGIN_DIRS[0]}"
   validate_plugin_dir
   local config_file="$PLUGIN_DIR/data.json"
   if [[ ! -f "$config_file" ]]; then
