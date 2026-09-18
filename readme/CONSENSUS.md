@@ -62,6 +62,56 @@ The private age identity lets an installation decrypt the shared configuration.
 The private device-signing key lets an enrolled installation authorize a new
 revision. Both credentials remain local to that installation.
 
+## Intermittently connected iPhone signers
+
+An iPhone running Obsidian can be an enrolled signer even when it does not
+expose a queryable Syncthing API. It should be treated as an intermittently
+connected participant, not as a continuously available quorum member.
+
+The important distinction is:
+
+- **Signing authority:** the iPhone may sign a configuration revision while
+  Obsidian is open, the configuration is unlocked, and its local signing key is
+  valid.
+- **Replication availability:** the iPhone may not receive a new `data.json`,
+  acknowledgement, or confirmation until Syncthing runs in the foreground or
+  otherwise completes a background sync permitted by iOS.
+- **Acceptance evidence:** the iPhone counts as current only after it has
+  actually decrypted and verified the revision. Its local UI may count that
+  acceptance immediately, but other installations should count it as observed
+  only after the signed acknowledgement has replicated. An old last-seen
+  timestamp must not be treated as a current acceptance.
+
+Desktop installations should not wait for the iPhone before saving a normal
+configuration change. They can save the next signed revision while the iPhone
+is offline; the iPhone remains behind and its Signing status stays pending
+until it reconnects, receives the revision, verifies it, and publishes its
+acknowledgement. The same rule applies in the other direction when the iPhone
+creates a change: the change becomes available to other installations only
+after its encrypted signed `data.json` reaches the mesh.
+
+The foreground recovery flow for the iPhone is therefore:
+
+1. Open Obsidian and unlock Tephramesh if required.
+2. Allow Syncthing to exchange the current encrypted configuration and
+   acknowledgement directories.
+3. Let Tephramesh verify the newest accepted revision and write a fresh signed
+   acknowledgement and observation.
+4. Keep the app and Syncthing active long enough for those files to replicate
+   back to the other installations.
+
+An iPhone that edits while disconnected can create a same-revision conflict
+with a desktop that edited independently. Tephramesh must keep rejecting that
+ambiguous branch rather than choosing whichever file arrives first. The user
+then explicitly keeps one branch, which is saved as a later signed revision.
+
+This model gives mobile installations meaningful signing authority without
+pretending that iOS background execution provides reliable consensus
+participation. For a stronger mobile workflow, a future implementation could
+add an explicit “mobile offline” status and a foreground “sync and verify”
+action, but neither should weaken revision, signature, or acknowledgement
+validation.
+
 ## Acceptance reporting
 
 Acceptance has two stages of observation:
