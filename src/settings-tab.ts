@@ -36,7 +36,7 @@ import { RemoveKnownDeviceModal } from "./remove-known-device-modal";
 import { INTERNAL_SECRET_ACCESS } from "./internal-access";
 import { ApproveEnrollmentModal } from "./approve-enrollment-modal";
 import { renderDeviceAvatar } from "./device-avatar";
-import { createMeshGraph } from "./mesh-graph";
+import { createConfigSigningGraph, createMeshGraph, createSigningGraph } from "./mesh-graph";
 
 type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology" | "graph";
 
@@ -398,25 +398,120 @@ export class TephrameshSettingTab extends PluginSettingTab {
     if (!this.graphElement) return;
     const container = this.graphElement;
     container.empty();
-    const graph = createMeshGraph(
+
+    const meshGraph = createMeshGraph(
       this.plugin.settings.instances,
       this.plugin.runtimeStatuses,
       this.plugin.settings.offlineTimeoutSeconds,
     );
-    const heading = container.createDiv({ cls: "tephramesh-mesh-graph-heading" });
-    heading.createEl("h3", { text: "Mesh connections" });
+    this.renderGraphPanel(container, meshGraph, {
+      title: "Mesh connections",
+      emptyText: "Add a Device to begin the mesh.",
+      typeLabel: "host",
+      typeLabelPlural: "hosts",
+      ariaLabel: `Complete mesh graph with ${meshGraph.nodes.length} hosts and ${meshGraph.links.length} configured links.`,
+      note: "Solid links are reported by a Device. Shard-to-shard links remain dashed because Shards are not used as API query sources.",
+      legend: [
+        ["connected", "Connected"],
+        ["disconnected", "Disconnected"],
+        ["unknown", "Not reported"],
+      ],
+      nodeStatus: (node) => instanceIndicatorState(
+        node.instance,
+        this.plugin.runtimeStatuses.get(node.instance.id),
+        this.plugin.settings.offlineTimeoutSeconds,
+      ),
+      nodeRole: (node) => node.instance.kind,
+      linkTitle: (link) => `${link.source.instance.name} ↔ ${link.target.instance.name}: ${link.state === "unknown" ? "not reported" : link.state}`,
+    });
+
+    const signingStatus = this.plugin.getSigningEnvironmentStatus();
+    const hasSigningInstallations = signingStatus.authenticatedInstallations.length > 0 || Boolean(signingStatus.pendingInstallation);
+    if (hasSigningInstallations) {
+      const signingGraph = createSigningGraph(signingStatus);
+      this.renderGraphPanel(container, signingGraph, {
+        title: "Signing trust",
+        emptyText: "No signing graph data is available yet.",
+        typeLabel: "signer",
+        typeLabelPlural: "signers",
+        ariaLabel: `Signing graph with ${signingGraph.nodes.length} signers and ${signingGraph.links.length} trust links.`,
+        note: "Rooted links connect each approved installation back to the enrollment root; approved links show a verified signer; pending nodes are awaiting a signed approval.",
+        legend: [
+          ["rooted", "Rooted link"],
+          ["approved", "Approved link"],
+          ["pending", "Pending approval"],
+        ],
+        nodeStatus: () => "idle",
+        nodeRole: (node) => {
+          if (node.instance.id === signingStatus.rootKeyId) return "root";
+          if (node.instance.setupState === "pending") return "pending approval";
+          return "approved";
+        },
+        linkTitle: (link) => `${link.source.instance.name} → ${link.target.instance.name}: ${link.state}`,
+      });
+
+      const configGraph = createConfigSigningGraph(signingStatus);
+      this.renderGraphPanel(container, configGraph, {
+        title: "Config signing",
+        emptyText: "No signed config status is available yet.",
+        typeLabel: "installation",
+        typeLabelPlural: "installations",
+        ariaLabel: `Configuration-signing graph with ${configGraph.nodes.length} installations and ${configGraph.links.length} acceptance links.`,
+        note: "Green nodes are using the current signed config; yellow nodes are still waiting for the local device to be observed by peers; pending requests remain yellow and dashed.",
+        legend: [
+          ["rooted", "Using current config"],
+          ["approved", "Knows this device is up to date"],
+          ["pending", "Waiting for acceptance"],
+        ],
+        nodeStatus: (node: { signingStatus?: { usingCurrentConfig: boolean; knowsLocalUpdate: boolean; pending: boolean } }) => {
+          const signing = node.signingStatus ?? { usingCurrentConfig: false, knowsLocalUpdate: false, pending: false };
+          if (signing.pending) return "warning";
+          return signing.usingCurrentConfig ? "idle" : "warning";
+        },
+        nodeRole: (node: { signingStatus?: { usingCurrentConfig: boolean; knowsLocalUpdate: boolean; pending: boolean } }) => {
+          const signing = node.signingStatus ?? { usingCurrentConfig: false, knowsLocalUpdate: false, pending: false };
+          if (signing.pending) return "pending";
+          if (signing.usingCurrentConfig && signing.knowsLocalUpdate) return "current and observed";
+          if (signing.usingCurrentConfig) return "using config";
+          if (signing.knowsLocalUpdate) return "observed";
+          return "waiting";
+        },
+        linkTitle: (link) => `${link.source.instance.name} → ${link.target.instance.name}: ${link.state}`,
+      });
+    }
+  }
+
+  private renderGraphPanel(
+    container: HTMLElement,
+    graph: ReturnType<typeof createMeshGraph>,
+    config: {
+      title: string;
+      emptyText: string;
+      typeLabel: string;
+      typeLabelPlural: string;
+      ariaLabel: string;
+      note: string;
+      legend: Array<[string, string]>;
+      nodeStatus: (node: { instance: MeshInstance; name: string; x: number; y: number; signingStatus?: { usingCurrentConfig: boolean; knowsLocalUpdate: boolean; pending: boolean } }) => string;
+      nodeRole: (node: { instance: MeshInstance; name: string; x: number; y: number; signingStatus?: { usingCurrentConfig: boolean; knowsLocalUpdate: boolean; pending: boolean } }) => string;
+      linkTitle: (link: { source: { instance: MeshInstance; name: string; x: number; y: number; signingStatus?: { usingCurrentConfig: boolean; knowsLocalUpdate: boolean; pending: boolean } }; target: { instance: MeshInstance; name: string; x: number; y: number; signingStatus?: { usingCurrentConfig: boolean; knowsLocalUpdate: boolean; pending: boolean } }; state: string }) => string;
+    },
+  ): void {
+    const panel = container.createDiv({ cls: "tephramesh-mesh-graph" });
+    const heading = panel.createDiv({ cls: "tephramesh-mesh-graph-heading" });
+    heading.createEl("h3", { text: config.title });
     heading.createSpan({
-      text: `${graph.nodes.length} ${graph.nodes.length === 1 ? "host" : "hosts"} · ${graph.links.length} ${graph.links.length === 1 ? "link" : "links"}`,
+      text: `${graph.nodes.length} ${graph.nodes.length === 1 ? config.typeLabel : config.typeLabelPlural} · ${graph.links.length} ${graph.links.length === 1 ? "link" : "links"}`,
     });
     if (graph.nodes.length === 0) {
-      container.createDiv({ cls: "tephramesh-mesh-graph-empty", text: "Add a Device to begin the mesh." });
+      panel.createDiv({ cls: "tephramesh-mesh-graph-empty", text: config.emptyText });
       return;
     }
 
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 100 100");
     svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", `Complete mesh graph with ${graph.nodes.length} hosts and ${graph.links.length} configured links.`);
+    svg.setAttribute("aria-label", config.ariaLabel);
     svg.classList.add("tephramesh-mesh-graph-svg");
     for (const link of graph.links) {
       const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
@@ -426,55 +521,44 @@ export class TephrameshSettingTab extends PluginSettingTab {
       line.setAttribute("y2", String(link.target.y));
       line.setAttribute("class", `tephramesh-mesh-graph-link is-${link.state}`);
       const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-      title.textContent = `${link.source.instance.name} ↔ ${link.target.instance.name}: ${link.state === "unknown" ? "not reported" : link.state}`;
+      title.textContent = config.linkTitle(link);
       line.appendChild(title);
       svg.appendChild(line);
     }
     for (const node of graph.nodes) {
       const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
-      const status = instanceIndicatorState(
-        node.instance,
-        this.plugin.runtimeStatuses.get(node.instance.id),
-        this.plugin.settings.offlineTimeoutSeconds,
-      );
+      const status = config.nodeStatus(node);
       group.setAttribute("class", `tephramesh-mesh-graph-node is-${node.instance.kind} is-${status}`);
       group.setAttribute("transform", `translate(${node.x} ${node.y})`);
       const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-      title.textContent = `${node.instance.name} · ${node.instance.kind} · ${status}`;
+      title.textContent = `${node.instance.name} · ${config.nodeRole(node)} · ${status}`;
       group.appendChild(title);
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       circle.setAttribute("r", "9");
       group.appendChild(circle);
-      const name = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      name.setAttribute("class", "tephramesh-mesh-graph-node-name");
-      name.setAttribute("text-anchor", "middle");
-      name.setAttribute("y", "-0.5");
-      name.textContent = node.instance.name.length > 13 ? `${node.instance.name.slice(0, 12)}…` : node.instance.name;
-      group.appendChild(name);
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("class", "tephramesh-mesh-graph-node-name");
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("y", "-0.5");
+      label.textContent = node.instance.name.length > 13 ? `${node.instance.name.slice(0, 12)}…` : node.instance.name;
+      group.appendChild(label);
       const role = document.createElementNS("http://www.w3.org/2000/svg", "text");
       role.setAttribute("class", "tephramesh-mesh-graph-node-role");
       role.setAttribute("text-anchor", "middle");
       role.setAttribute("y", "3.5");
-      role.textContent = node.instance.kind;
+      role.textContent = config.nodeRole(node);
       group.appendChild(role);
       svg.appendChild(group);
     }
-    container.appendChild(svg);
+    panel.appendChild(svg);
 
-    const legend = container.createDiv({ cls: "tephramesh-mesh-graph-legend" });
-    for (const [state, label] of [
-      ["connected", "Connected"],
-      ["disconnected", "Disconnected"],
-      ["unknown", "Not reported"],
-    ] as const) {
+    const legend = panel.createDiv({ cls: "tephramesh-mesh-graph-legend" });
+    for (const [state, label] of config.legend) {
       const item = legend.createSpan();
       item.createSpan({ cls: `tephramesh-mesh-graph-legend-line is-${state}` });
       item.appendText(label);
     }
-    container.createDiv({
-      cls: "tephramesh-mesh-graph-note",
-      text: "Solid links are reported by a Device. Shard-to-shard links remain dashed because Shards are not used as API query sources.",
-    });
+    panel.createDiv({ cls: "tephramesh-mesh-graph-note", text: config.note });
   }
 
   private renderMesh(container: HTMLElement): void {

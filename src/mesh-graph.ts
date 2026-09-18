@@ -1,12 +1,20 @@
 import type { InstanceRuntimeStatus, MeshInstance } from "./model";
 import { isRuntimeStatusFresh } from "./topology";
 
-export type MeshGraphLinkState = "connected" | "disconnected" | "unknown";
+export type MeshGraphLinkState = "connected" | "disconnected" | "unknown" | "rooted" | "approved" | "pending";
+
+export interface MeshGraphSigningStatus {
+  usingCurrentConfig: boolean;
+  knowsLocalUpdate: boolean;
+  pending: boolean;
+}
 
 export interface MeshGraphNode {
+  name: string;
   instance: MeshInstance;
   x: number;
   y: number;
+  signingStatus?: MeshGraphSigningStatus;
 }
 
 export interface MeshGraphLink {
@@ -18,6 +26,36 @@ export interface MeshGraphLink {
 export interface MeshGraph {
   nodes: MeshGraphNode[];
   links: MeshGraphLink[];
+}
+
+export interface SigningEnvironmentGraphStatus {
+  state: "unsigned" | "approval-required" | "enrolled";
+  rootKeyId: string;
+  revision?: number;
+  acceptedCount?: number;
+  acceptanceSeenByCount?: number;
+  enrolledCount?: number;
+  localInstallationName?: string;
+  pendingInstallation?: {
+    bindingId: string;
+    deviceId: string;
+    keyId: string;
+    name: string;
+    source: "mesh" | "known" | "unconfigured";
+  };
+  authenticatedInstallations: Array<{
+    bindingId: string;
+    deviceId: string;
+    keyId: string;
+    name: string;
+    source: "mesh" | "known" | "unconfigured";
+    isLocal: boolean;
+    createdAt: string;
+    approvedByName?: string;
+    isEnrollmentRoot: boolean;
+    acceptedCurrentConfig: boolean;
+    hasSeenLocalAcceptance: boolean;
+  }>;
 }
 
 export function createMeshGraph(
@@ -32,6 +70,7 @@ export function createMeshGraph(
       ? -Math.PI / 2
       : -Math.PI / 2 + (index * Math.PI * 2) / active.length;
     return {
+      name: instance.name,
       instance,
       x: 50 + Math.cos(angle) * 36,
       y: 50 + Math.sin(angle) * 36,
@@ -79,4 +118,157 @@ function peerReport(
   const status = statuses.get(reporter.id);
   if (!isRuntimeStatusFresh(status, timeoutSeconds, now)) return undefined;
   return status?.peerConnections?.[peer.deviceId];
+}
+
+export function createSigningGraph(status: SigningEnvironmentGraphStatus): MeshGraph {
+  const nodeEntries: Array<{
+    id: string;
+    name: string;
+    kind: MeshInstance["kind"];
+    deviceId: string;
+    setupState?: MeshInstance["setupState"];
+    isRoot: boolean;
+    approvedByName?: string;
+    isPending: boolean;
+    usingCurrentConfig: boolean;
+    knowsLocalUpdate: boolean;
+  }> = [];
+
+  for (const installation of status.authenticatedInstallations) {
+    nodeEntries.push({
+      id: installation.keyId,
+      name: installation.name,
+      kind: "device",
+      deviceId: installation.deviceId,
+      isRoot: installation.isEnrollmentRoot,
+      approvedByName: installation.approvedByName,
+      isPending: false,
+      usingCurrentConfig: installation.acceptedCurrentConfig,
+      knowsLocalUpdate: installation.hasSeenLocalAcceptance,
+    });
+  }
+
+  if (status.pendingInstallation) {
+    nodeEntries.push({
+      id: status.pendingInstallation.keyId,
+      name: status.pendingInstallation.name,
+      kind: "device",
+      deviceId: status.pendingInstallation.deviceId,
+      isRoot: false,
+      isPending: true,
+      usingCurrentConfig: false,
+      knowsLocalUpdate: false,
+    });
+  }
+
+  const uniqueNodes = new Map<string, typeof nodeEntries[number]>();
+  for (const entry of nodeEntries) {
+    if (!uniqueNodes.has(entry.id)) uniqueNodes.set(entry.id, entry);
+  }
+  const nodes = [...uniqueNodes.values()].map((node, index) => {
+    const angle = uniqueNodes.size === 1
+      ? -Math.PI / 2
+      : -Math.PI / 2 + (index * Math.PI * 2) / uniqueNodes.size;
+    const instance: MeshInstance = {
+      id: node.id,
+      name: node.name,
+      kind: node.kind,
+      endpoint: { protocol: "https", hostname: "signing", port: 443 },
+      deviceId: node.deviceId,
+      folderPath: "/signing",
+      setupState: node.isPending ? "pending" : undefined,
+    };
+    return {
+      name: node.name,
+      instance,
+      x: 50 + Math.cos(angle) * 36,
+      y: 50 + Math.sin(angle) * 36,
+      signingStatus: {
+        usingCurrentConfig: node.usingCurrentConfig,
+        knowsLocalUpdate: node.knowsLocalUpdate,
+        pending: node.isPending,
+      },
+    };
+  });
+
+  const nodeById = new Map(nodes.map((node) => [node.instance.id, node]));
+  const nodeByName = new Map(nodes.map((node) => [node.instance.name, node]));
+  const links: MeshGraphLink[] = [];
+
+  const rootNode = status.rootKeyId ? nodeById.get(status.rootKeyId) : undefined;
+  for (const node of nodes) {
+    const entry = [...uniqueNodes.values()].find((candidate) => candidate.id === node.instance.id);
+    if (!entry) continue;
+    if (entry.isPending) {
+      if (rootNode) {
+        links.push({ source: rootNode, target: node, state: "pending" });
+      }
+      continue;
+    }
+    if (rootNode && node.instance.id !== status.rootKeyId) {
+      const source = entry.approvedByName ? nodeByName.get(entry.approvedByName) ?? rootNode : rootNode;
+      if (source && source.instance.id !== node.instance.id) {
+        links.push({
+          source: source,
+          target: node,
+          state: source.instance.id === rootNode.instance.id ? "rooted" : "approved",
+        });
+      }
+    }
+  }
+
+  return { nodes, links };
+}
+
+export function createConfigSigningGraph(status: SigningEnvironmentGraphStatus): MeshGraph {
+  const graph = createSigningGraph(status);
+  const localNode = graph.nodes.find((node) =>
+    node.signingStatus?.pending === false &&
+    status.authenticatedInstallations.some(
+      (installation) => installation.keyId === node.instance.id && installation.isLocal,
+    ),
+  );
+  const anchorNode = localNode ?? graph.nodes[0] ?? {
+    name: "Local",
+    instance: {
+      id: "local",
+      name: "Local",
+      kind: "device",
+      endpoint: { protocol: "https", hostname: "local", port: 443 },
+      deviceId: "local",
+      folderPath: "/local",
+    },
+    x: 50,
+    y: 50,
+    signingStatus: { usingCurrentConfig: false, knowsLocalUpdate: false, pending: false },
+  };
+
+  const links: MeshGraphLink[] = [];
+  for (const node of graph.nodes) {
+    if (node.instance.id === anchorNode.instance.id) continue;
+    const installation = status.authenticatedInstallations.find((entry) => entry.keyId === node.instance.id);
+    if (!installation) {
+      links.push({ source: anchorNode, target: node, state: "pending" });
+      continue;
+    }
+
+    const state: MeshGraphLinkState = installation.acceptedCurrentConfig
+      ? "rooted"
+      : installation.hasSeenLocalAcceptance
+        ? "approved"
+        : "pending";
+    links.push({ source: anchorNode, target: node, state });
+  }
+
+  return {
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      signingStatus: {
+        usingCurrentConfig: node.signingStatus?.usingCurrentConfig ?? false,
+        knowsLocalUpdate: node.signingStatus?.knowsLocalUpdate ?? false,
+        pending: node.signingStatus?.pending ?? false,
+      },
+    })),
+    links,
+  };
 }

@@ -677,6 +677,19 @@ button.tephramesh-approve-button:hover {
   stroke: var(--text-success);
 }
 
+.tephramesh-mesh-graph-link.is-rooted {
+  stroke: var(--text-success);
+}
+
+.tephramesh-mesh-graph-link.is-approved {
+  stroke: var(--text-accent);
+}
+
+.tephramesh-mesh-graph-link.is-pending {
+  stroke: var(--text-warning);
+  stroke-dasharray: 4 3;
+}
+
 .tephramesh-mesh-graph-link.is-disconnected {
   stroke: var(--text-error);
 }
@@ -747,8 +760,18 @@ button.tephramesh-approve-button:hover {
   width: 1.25rem;
 }
 
-.tephramesh-mesh-graph-legend-line.is-connected {
+.tephramesh-mesh-graph-legend-line.is-connected,
+.tephramesh-mesh-graph-legend-line.is-rooted {
   border-color: var(--text-success);
+}
+
+.tephramesh-mesh-graph-legend-line.is-approved {
+  border-color: var(--text-accent);
+}
+
+.tephramesh-mesh-graph-legend-line.is-pending {
+  border-color: var(--text-warning);
+  border-top-style: dashed;
 }
 
 .tephramesh-mesh-graph-legend-line.is-disconnected {
