@@ -64,6 +64,8 @@ import {
   createEnrollmentApproval,
   createEnrollmentCancellation,
   createGenesisEnrollment,
+  createRootRotationTransition,
+  reissueEnrollmentsForRotatedRoot,
   createSignedConfigEnvelope,
   decodeEnrollmentApproval,
   decodeEnrollmentCancellation,
@@ -82,6 +84,7 @@ import {
   verifySignedConfigEnvelope,
   type DeviceEnrollment,
   type LocalDeviceSigningRecord,
+  type RootRotationTransition,
 } from "./config-signing";
 import { createConfigJournalRecord, isConfigJournalRecord, type ConfigJournalRecord } from "./config-journal";
 import { DebugLogger } from "./debug-logger";
@@ -104,6 +107,13 @@ import {
   verifyContentSignature,
   type ContentSignatureRecord,
 } from "./content-signing";
+import {
+  MetricsStore,
+  METRICS_MIN_INTERVAL_MS,
+  type MetricsCrypto,
+  type MetricsPoint,
+  type MetricsSummary,
+} from "./metrics";
 
 interface EncryptedSettingsEnvelope {
   schemaVersion: 3;
@@ -143,9 +153,11 @@ export default class TephrameshPlugin extends Plugin {
   private signingRootKeyId = "";
   private signingEnrollments: DeviceEnrollment[] = [];
   private signingRevokedEnrollmentKeyIds: string[] = [];
+  private signingRootTransition?: RootRotationTransition;
   private signedConfigRevision = 0;
   private signedConfigHash = "";
   private signedConfigConflict?: { revision: number; envelopeHash: string };
+  private storedIdentityUnlockError = "";
   private signingTrust: "unsigned" | "approval-required" | "enrolled" = "unsigned";
   private storageFormat: 2 | 3 = 3;
   private saveQueue: Promise<void> = Promise.resolve();
@@ -164,6 +176,8 @@ export default class TephrameshPlugin extends Plugin {
   private contentSigningStatusPollTimer?: number;
   private contentSigningStatusPendingUntil = new Map<string, number>();
   private contentSigningStatusRefreshVersion = 0;
+  private readonly metricsStore = new MetricsStore(this.app.vault.adapter);
+  private metricsLastWrittenAt = new Map<string, number>();
   private pendingNoteScans = new Set<string>();
   private noteScanQueueInProgress = false;
   private readonly debugLogger = new DebugLogger(
@@ -310,6 +324,9 @@ export default class TephrameshPlugin extends Plugin {
         if (file.path === this.pluginDataFilePath()) {
           await this.maybeReloadFromExternalPluginData(file.path);
         }
+        if (file.path.startsWith(".tephramesh/metrics/")) {
+          this.settingTab.refreshMetricsIfVisible();
+        }
         this.scheduleLocalNoteScan(file.path);
         if ("extension" in file && this.contentSigningLocalEdits.has(file.path)) {
           this.scheduleContentSigning(file as TFile, true);
@@ -328,6 +345,9 @@ export default class TephrameshPlugin extends Plugin {
       this.registerEvent(this.app.vault.on("create", async (file) => {
         if (file.path === this.pluginDataFilePath()) {
           await this.maybeReloadFromExternalPluginData(file.path);
+        }
+        if (file.path.startsWith(".tephramesh/metrics/")) {
+          this.settingTab.refreshMetricsIfVisible();
         }
         this.scheduleLocalNoteScan(file.path);
         if (isContentSignaturePath(file.path)) {
@@ -513,6 +533,7 @@ export default class TephrameshPlugin extends Plugin {
         Math.max(this.signedConfigRevision + 1, blocks.at(-1)?.version ?? 0),
         localSigning,
         this.signingRevokedEnrollmentKeyIds,
+        this.signingRootTransition,
       );
       nextSignedHash = await sha256Canonical(nextSignedEnvelope);
       encryptedPayload = nextSignedEnvelope;
@@ -1696,6 +1717,59 @@ export default class TephrameshPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  async rotateSigningRoot(): Promise<void> {
+    if (this.signingTrust !== "enrolled" || !this.signingRootKeyId) {
+      throw new Error("Only an enrolled installation can rotate the enrollment root.");
+    }
+
+    const local = this.getLocalSigningRecord();
+    if (!local?.rootKeyId || local.keyId !== this.signingRootKeyId) {
+      throw new Error("Only the current enrollment-root installation can rotate the root.");
+    }
+    if (this.signingRootTransition) {
+      throw new Error("An enrollment-root rotation is already pending.");
+    }
+    const previousRootKeyId = this.signingRootKeyId;
+    const newRoot = await generateSigningKeyPair();
+    const transition = await createRootRotationTransition(
+      previousRootKeyId,
+      newRoot,
+      local,
+      local.bindingId,
+      local.deviceId,
+      this.signingEnrollments,
+    );
+    const previousLocal = structuredClone(local);
+    this.signingRootTransition = transition;
+    this.signingRootKeyId = newRoot.keyId;
+    this.signingEnrollments = await reissueEnrollmentsForRotatedRoot(
+      this.signingEnrollments,
+      newRoot,
+    );
+    this.setLocalSigningRecord({
+      ...local,
+      keyId: newRoot.keyId,
+      rootKeyId: newRoot.keyId,
+      rootPublicKey: newRoot.publicKey,
+      rootPrivateKey: newRoot.privateKey,
+      previousRootKeyIds: [...new Set([...(local.previousRootKeyIds ?? []), previousRootKeyId])],
+    });
+    try {
+      await this.saveSettings();
+    } catch (error) {
+      this.signingRootTransition = undefined;
+      this.signingRootKeyId = previousRootKeyId;
+      this.setLocalSigningRecord(previousLocal);
+      throw error;
+    }
+  }
+
+  canRotateSigningRoot(): boolean {
+    const local = this.getLocalSigningRecord();
+    return this.signingTrust === "enrolled" &&
+      Boolean(this.signingRootKeyId && local?.keyId === this.signingRootKeyId);
+  }
+
   async generateEnrollmentRequest(bindingId: string): Promise<string> {
     if (!this.signingRootKeyId || this.signingTrust !== "approval-required") {
       throw new Error("This installation does not need enrollment approval.");
@@ -1945,6 +2019,10 @@ export default class TephrameshPlugin extends Plugin {
     void this.refreshStatuses(true);
   }
 
+  getStoredIdentityUnlockError(): string {
+    return this.storedIdentityUnlockError;
+  }
+
   getSignedConfigConflict(): { revision: number; envelopeHash: string } | undefined {
     return this.signedConfigConflict;
   }
@@ -2013,14 +2091,19 @@ export default class TephrameshPlugin extends Plugin {
   }
 
   private async tryUnlockStoredIdentity(): Promise<void> {
+    this.storedIdentityUnlockError = "";
     if (!this.hasEncryptionConfigured()) return;
     const identity = this.app.secretStorage.getSecret(AGE_IDENTITY_SECRET_NAME);
-    if (!identity) return;
+    if (!identity) {
+      this.storedIdentityUnlockError = "No identity was found under tephramesh-age-identity.";
+      return;
+    }
     try {
       const keys = await validateAgeKeyPair(this.settings.ageRecipient, identity);
       await this.decryptStoredData(keys.identity);
-    } catch {
+    } catch (error) {
       this.#secrets = undefined;
+      this.storedIdentityUnlockError = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -2035,8 +2118,24 @@ export default class TephrameshPlugin extends Plugin {
         let enrolledLocal: LocalDeviceSigningRecord | undefined;
         let completePendingApproval = false;
         let conflictingRevision = false;
+        const transition = verified.envelope.rootTransition;
+        const hasActiveRotatedRoot = Boolean(
+          transition &&
+          verified.envelope.enrollments.some(
+            (enrollment) => enrollment.keyId === transition.newRootKeyId,
+          ),
+        );
+        const isRotatedRootInstallation = Boolean(
+          transition &&
+          local &&
+          (local.keyId === transition.newRootKeyId ||
+            (local.rootKeyId === transition.newRootKeyId &&
+              local.rootPublicKey === transition.newRootPublicKey)),
+        );
         if (local?.rootKeyId) {
-          if (local.rootKeyId !== verified.envelope.rootKeyId) {
+          const acceptedPreviousRoot = transition &&
+            local.rootKeyId === transition.previousRootKeyId;
+          if (local.rootKeyId !== verified.envelope.rootKeyId && !acceptedPreviousRoot) {
             throw new Error("The signed configuration uses a different enrollment root.");
           }
           try {
@@ -2059,23 +2158,29 @@ export default class TephrameshPlugin extends Plugin {
             local,
             verified.envelope.enrollments,
             verified.envelope.revokedEnrollmentKeyIds ?? [],
+            verified.envelope.rootTransition,
           );
           const enrollment = verified.envelope.enrollments.find(
             (candidate) => candidate.keyId === local.keyId,
           );
           if (!enrollment) {
-            if (!local.pendingApproval || !local.pendingRequest) {
+            const isRotatedRootLocal = transition?.newRootKeyId === local.keyId &&
+              transition.newRootPublicKey === local.publicKey;
+            if (isRotatedRootLocal) {
+              enrolledLocal = { ...local };
+            } else if (!local.pendingApproval || !local.pendingRequest) {
               throw new Error("This installation's signing key is not enrolled.");
+            } else {
+              await verifyEnrollmentApproval(local.pendingApproval, local);
+              if (local.pendingApproval.approvedRevision !== verified.envelope.revision ||
+                  local.pendingApproval.approvedEnvelopeHash !== verified.hash) {
+                throw new Error("The pending enrollment approval is stale.");
+              }
+              this.signingEnrollments = structuredClone(
+                local.pendingApproval.enrollments,
+              );
+              completePendingApproval = true;
             }
-            await verifyEnrollmentApproval(local.pendingApproval, local);
-            if (local.pendingApproval.approvedRevision !== verified.envelope.revision ||
-                local.pendingApproval.approvedEnvelopeHash !== verified.hash) {
-              throw new Error("The pending enrollment approval is stale.");
-            }
-            this.signingEnrollments = structuredClone(
-              local.pendingApproval.enrollments,
-            );
-            completePendingApproval = true;
           } else if (enrollment.deviceId !== local.deviceId ||
                      enrollment.bindingId !== local.bindingId) {
             throw new Error("This installation's signing key has the wrong device binding.");
@@ -2084,6 +2189,22 @@ export default class TephrameshPlugin extends Plugin {
           if (!conflictingRevision) {
             enrolledLocal = {
               ...local,
+              ...(transition && isRotatedRootInstallation
+                ? {
+                    keyId: transition.newRootKeyId,
+                    publicKey: transition.newRootPublicKey,
+                    privateKey: local.rootPrivateKey ?? local.privateKey,
+                    rootKeyId: transition.newRootKeyId,
+                    rootPublicKey: transition.newRootPublicKey,
+                    rootPrivateKey: local.rootPrivateKey ?? local.privateKey,
+                  }
+                : {}),
+              rootKeyId: hasActiveRotatedRoot
+                ? verified.envelope.rootKeyId
+                : local.rootKeyId,
+              previousRootKeyIds: transition
+                ? [...new Set([...(local.previousRootKeyIds ?? []), transition.previousRootKeyId])]
+                : local.previousRootKeyIds,
               lastAcceptedRevision: verified.envelope.revision,
               lastAcceptedEnvelopeHash: verified.hash,
               lastAcceptedEnrollmentKeyIds: verified.envelope.enrollments.map((candidate) => candidate.keyId),
@@ -2094,11 +2215,35 @@ export default class TephrameshPlugin extends Plugin {
           this.signingTrust = "approval-required";
         }
         this.signingRootKeyId = verified.envelope.rootKeyId;
+        this.signingRootTransition = verified.envelope.rootTransition
+          ? structuredClone(verified.envelope.rootTransition)
+          : undefined;
         this.signingRevokedEnrollmentKeyIds = [
           ...(verified.envelope.revokedEnrollmentKeyIds ?? []),
         ];
         if (!completePendingApproval) {
           this.signingEnrollments = structuredClone(verified.envelope.enrollments);
+        }
+        if (transition && !hasActiveRotatedRoot && !isRotatedRootInstallation) {
+          throw new Error("The enrollment-root transition is awaiting repair by the current root installation.");
+        }
+        const needsRootTransitionRepair = Boolean(
+          verified.envelope.rootTransition &&
+          enrolledLocal &&
+          (enrolledLocal.keyId === verified.envelope.rootTransition.newRootKeyId ||
+            (enrolledLocal.rootKeyId === verified.envelope.rootTransition.newRootKeyId &&
+              enrolledLocal.rootPublicKey === verified.envelope.rootTransition.newRootPublicKey)) &&
+          !this.signingEnrollments.some(
+            (enrollment) => enrollment.keyId === verified.envelope.rootKeyId,
+          ),
+        );
+        if (needsRootTransitionRepair && enrolledLocal) {
+          this.signingEnrollments = await reissueEnrollmentsForRotatedRoot(
+            this.signingEnrollments,
+            enrolledLocal,
+            enrolledLocal.bindingId,
+            enrolledLocal.deviceId,
+          );
         }
         this.signedConfigRevision = verified.envelope.revision;
         this.signedConfigHash = verified.hash;
@@ -2114,7 +2259,7 @@ export default class TephrameshPlugin extends Plugin {
           verified.envelope.revision < latestConfigVersion,
         );
         if (enrolledLocal) this.setLocalSigningRecord(enrolledLocal);
-        if (completePendingApproval || (repairedHistory && enrolledLocal) || needsSigningRevisionCatchUp) {
+        if (completePendingApproval || needsRootTransitionRepair || (repairedHistory && enrolledLocal) || needsSigningRevisionCatchUp) {
           await this.saveSettings();
         } else if (enrolledLocal && !conflictingRevision) {
           try {
@@ -2200,6 +2345,7 @@ export default class TephrameshPlugin extends Plugin {
 
   private resetSigningRuntimeState(): void {
     this.signingRootKeyId = "";
+    this.signingRootTransition = undefined;
     this.signingEnrollments = [];
     this.signingRevokedEnrollmentKeyIds = [];
     this.signedConfigRevision = 0;
@@ -3304,6 +3450,7 @@ export default class TephrameshPlugin extends Plugin {
       if (forceNameCheck) this.forcedStatusRefreshPending = true;
       return;
     }
+
     const availabilityBefore = activeMeshInstances(this.settings.instances)
       .map((instance) => `${instance.id}:${isRuntimeStatusFresh(
         this.runtimeStatuses.get(instance.id),
@@ -3381,6 +3528,66 @@ export default class TephrameshPlugin extends Plugin {
         void this.refreshStatuses(true);
       }
     }
+  }
+
+  async readMetricsSummary(): Promise<MetricsSummary> {
+    const crypto = this.getMetricsCrypto();
+    if (crypto) this.metricsStore.setCrypto(crypto);
+    const localDeviceId =
+      this.getLocalSigningRecord()?.deviceId ??
+      this.settings.instances.find((candidate) => candidate.id === this.settings.primaryInstanceId)?.deviceId;
+    return this.metricsStore.readSummary(localDeviceId);
+  }
+
+  private getMetricsCrypto(): MetricsCrypto | undefined {
+    const identity = this.app.secretStorage.getSecret(AGE_IDENTITY_SECRET_NAME);
+    if (!identity || !this.settings.ageRecipient) return undefined;
+    return {
+      encrypt: (content) => encryptVaultContent(this.settings.ageRecipient, content),
+      decrypt: (content) => decryptVaultContent(identity, content),
+      signer: this.getLocalSigningRecord() ?? undefined,
+      rootKeyId: this.signingRootKeyId || undefined,
+      enrollments: this.signingEnrollments,
+      revokedEnrollmentKeyIds: this.signingRevokedEnrollmentKeyIds,
+    };
+  }
+
+  private recordMetrics(
+    instance: MeshInstance,
+    available: boolean,
+    peerConnections?: Record<string, boolean>,
+  ): void {
+    const localDeviceId =
+      this.getLocalSigningRecord()?.deviceId ??
+      this.settings.instances.find((candidate) => candidate.id === this.settings.primaryInstanceId)?.deviceId ??
+      instance.deviceId;
+    const now = Date.now();
+    const points: MetricsPoint[] = [];
+    const apiKey = `api:${instance.id}`;
+    if ((this.metricsLastWrittenAt.get(apiKey) ?? 0) + METRICS_MIN_INTERVAL_MS <= now) {
+      this.metricsLastWrittenAt.set(apiKey, now);
+      points.push({
+        measurement: "tephramesh_api",
+        tags: { instance: instance.id, kind: instance.kind },
+        fields: { available: available ? 1 : 0 },
+        timestamp: now,
+      });
+    }
+    if (peerConnections) {
+      for (const [peerId, connected] of Object.entries(peerConnections)) {
+        const key = `peer:${instance.id}:${peerId}`;
+        if ((this.metricsLastWrittenAt.get(key) ?? 0) + METRICS_MIN_INTERVAL_MS > now) continue;
+        this.metricsLastWrittenAt.set(key, now);
+        points.push({
+          measurement: "tephramesh_peer",
+          tags: { instance: instance.id, peer: peerId },
+          fields: { connected: connected ? 1 : 0 },
+          timestamp: now,
+        });
+      }
+    }
+    const crypto = this.getMetricsCrypto();
+    if (points.length > 0 && crypto) void this.metricsStore.append(localDeviceId, points, crypto);
   }
 
   async refreshInstanceStatus(
@@ -3500,6 +3707,7 @@ export default class TephrameshPlugin extends Plugin {
         peerConnections,
         ...rates,
       });
+      this.recordMetrics(instance, true, peerConnections);
       void debug("status check completed", {
         ok: true,
         folderState: folder?.state,
@@ -3508,6 +3716,7 @@ export default class TephrameshPlugin extends Plugin {
         paused: Boolean(folderConfig?.paused),
       });
     } catch (error) {
+      this.recordMetrics(instance, false);
       this.runtimeStatuses.set(instance.id, {
         checkedAt: Date.now(),
         ok: false,

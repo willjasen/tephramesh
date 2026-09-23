@@ -50,6 +50,58 @@
   overflow-x: auto;
 }
 
+.tephramesh-metrics-chart {
+  margin: var(--size-4-4) 0;
+}
+
+.tephramesh-metrics-chart svg {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  display: block;
+  max-width: 100%;
+  width: 100%;
+}
+
+.tephramesh-metrics-grid {
+  stroke: var(--background-modifier-border);
+  stroke-dasharray: 3 3;
+}
+
+.tephramesh-metrics-axis,
+.tephramesh-metrics-axis-line {
+  fill: var(--text-muted);
+  stroke: var(--text-muted);
+  font-size: 11px;
+}
+
+.tephramesh-metrics-line.is-api,
+.tephramesh-metrics-point.is-api {
+  stroke: var(--color-green, var(--text-success));
+  fill: var(--color-green, var(--text-success));
+}
+
+.tephramesh-metrics-line.is-peer,
+.tephramesh-metrics-point.is-peer {
+  stroke: var(--color-blue, #59c2ff);
+  fill: var(--color-blue, #59c2ff);
+}
+
+.tephramesh-metrics-legend {
+  display: inline-block;
+  font-size: var(--font-ui-small);
+  margin-right: var(--size-4-3);
+  margin-top: var(--size-4-2);
+}
+
+.tephramesh-metrics-legend.is-api {
+  color: var(--color-green, var(--text-success));
+}
+
+.tephramesh-metrics-legend.is-peer {
+  color: var(--color-blue, #59c2ff);
+}
+
 .tephramesh-tab {
   background: transparent;
   border: 0;

@@ -38,11 +38,12 @@ import { ApproveEnrollmentModal } from "./approve-enrollment-modal";
 import { renderDeviceAvatar } from "./device-avatar";
 import { createConfigSigningGraph, createMeshGraph, createSigningGraph } from "./mesh-graph";
 
-type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology" | "graph";
+type SettingsSection = "instances" | "vault" | "config" | "auth" | "topology" | "graph" | "metrics";
 
 const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "topology", label: "Topology" },
   { id: "graph", label: "Graph" },
+  { id: "metrics", label: "Metrics" },
   { id: "instances", label: "Instances" },
   { id: "vault", label: "Vault" },
   { id: "config", label: "Config" },
@@ -61,6 +62,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
   private instancesTabIndicator?: HTMLElement;
   private reconciliationElement?: HTMLElement;
   private graphElement?: HTMLElement;
+  private metricsElement?: HTMLElement;
   private activeSection: SettingsSection = "topology";
   private visible = false;
   private configRevealed = false;
@@ -115,6 +117,7 @@ export class TephrameshSettingTab extends PluginSettingTab {
     this.instancesTabIndicator = undefined;
     this.reconciliationElement = undefined;
     this.graphElement = undefined;
+    this.metricsElement = undefined;
     containerEl.createEl("h1", { text: "Tephramesh" });
 
     if (!this.plugin.hasEncryptionConfigured()) {
@@ -193,6 +196,13 @@ export class TephrameshSettingTab extends PluginSettingTab {
     container.createEl("p", {
       text: "This vault already contains an age-encrypted Tephramesh configuration and its public recipient. Enter the matching private identity once on this Obsidian installation.",
     });
+    const storedIdentityError = this.plugin.getStoredIdentityUnlockError();
+    if (storedIdentityError) {
+      container.createEl("p", {
+        cls: "tephramesh-config-warning",
+        text: `The identity stored in Obsidian Keychain could not unlock this configuration: ${storedIdentityError}`,
+      });
+    }
     let identity = "";
     new Setting(container)
       .setName("Age private identity")
@@ -258,6 +268,12 @@ export class TephrameshSettingTab extends PluginSettingTab {
 
   refreshReconciliationReport(): void {
     this.updateReconciliation();
+  }
+
+  refreshMetricsIfVisible(): void {
+    if (this.visible && this.activeSection === "metrics") {
+      this.renderMetrics();
+    }
   }
 
   private renderOnboarding(container: HTMLElement): void {
@@ -386,7 +402,80 @@ export class TephrameshSettingTab extends PluginSettingTab {
       case "graph":
         this.renderGraph(sectionContainer);
         break;
+      case "metrics":
+        this.renderMetrics(sectionContainer);
+        break;
     }
+  }
+
+  private renderMetrics(container?: HTMLElement): void {
+    const target = container ?? this.metricsElement?.parentElement;
+    if (!target) return;
+    if (!container) target.empty();
+    this.metricsElement = target.createDiv({ cls: "tephramesh-metrics" });
+    this.metricsElement.createEl("h2", { text: "Connection metrics" });
+    this.metricsElement.createEl("p", {
+      text: "Every minute, Tephramesh records whether each Syncthing API could be reached and whether each reported peer was connected. These compact, encrypted samples are stored in .tephramesh/metrics and synchronized with the vault.",
+    });
+    const loading = this.metricsElement.createDiv({ cls: "tephramesh-muted" });
+    loading.setText("Loading metrics…");
+    void this.plugin.readMetricsSummary().then((summary) => {
+      if (!this.metricsElement) return;
+      loading.remove();
+      const latest = summary.latestTimestamp
+        ? new Date(summary.latestTimestamp).toLocaleString()
+        : "No samples yet";
+      const setting = new Setting(this.metricsElement)
+        .setName("Stored data points")
+        .setDesc(`${summary.points} point${summary.points === 1 ? "" : "s"} across ${summary.files} file${summary.files === 1 ? "" : "s"} · latest ${latest}`)
+        .addButton((button) => button.setButtonText("Refresh").onClick(() => this.display()));
+      setting.controlEl.createDiv({ cls: "tephramesh-metrics-summary", text: "One point is one API or peer measurement." });
+      this.renderMetricsChart(this.metricsElement, summary.apiSeriesByInstance);
+      new Setting(this.metricsElement)
+        .setName("API reachability")
+        .setDesc("“Available” means Tephramesh completed the Syncthing REST status request. It does not describe vault sync state.")
+        .addText((text) => text.setValue(`${summary.apiAvailable} available of ${summary.apiTotal} API points`).setDisabled(true));
+      new Setting(this.metricsElement)
+        .setName("Peer connectivity")
+        .setDesc("“Connected” means Syncthing reported an active transport connection to that peer at sample time.")
+        .addText((text) => text.setValue(`${summary.peersConnected} connected of ${summary.peersTotal} peer points`).setDisabled(true));
+    });
+  }
+
+  private renderMetricsChart(
+    container: HTMLElement,
+    apiSeriesByInstance: Readonly<Record<string, ReadonlyArray<{ timestamp: number; value: number }>>>,
+  ): void {
+    const chart = container.createDiv({ cls: "tephramesh-metrics-chart" });
+    chart.createEl("h3", { text: "Instances up over time" });
+    chart.createEl("p", {
+      cls: "tephramesh-muted",
+      text: "The current installation’s metrics show whether each Tephramesh instance was reachable during the last 6 hours. Green means up; red means unavailable.",
+    });
+    const width = 720;
+    const rows = this.plugin.settings.instances.filter((instance) => instance.setupState !== "pending");
+    const rowHeight = 30;
+    const height = Math.max(100, 48 + rows.length * rowHeight);
+    const svg = chart.createSvg("svg", { attr: { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "API and peer connectivity over time" } });
+    const now = Date.now();
+    const start = now - 6 * 60 * 60 * 1000;
+    const x = (timestamp: number) => 42 + ((timestamp - start) / (now - start)) * (width - 58);
+    svg.createSvg("line", { attr: { x1: 42, x2: 42, y1: 18, y2: height - 24, class: "tephramesh-metrics-axis-line" } });
+    svg.createSvg("line", { attr: { x1: 42, x2: width - 16, y1: height - 24, y2: height - 24, class: "tephramesh-metrics-axis-line" } });
+    for (const [index, instance] of rows.entries()) {
+      const top = 12 + index * rowHeight;
+      const series = apiSeriesByInstance[instance.id] ?? [];
+      const visible = series.filter((point) => point.timestamp >= start);
+      svg.createSvg("text", { attr: { x: 4, y: top + 17, class: "tephramesh-metrics-axis" } }).setText(instance.name);
+      svg.createSvg("rect", { attr: { x: 42, y: top + 4, width: width - 58, height: 20, rx: 3, class: "tephramesh-metrics-uptime-background" } });
+      for (const [pointIndex, point] of visible.entries()) {
+        const next = visible[pointIndex + 1];
+        const end = Math.min(next?.timestamp ?? now, now);
+        svg.createSvg("rect", { attr: { x: x(point.timestamp), y: top + 4, width: Math.max(1, x(end) - x(point.timestamp)), height: 20, class: `tephramesh-metrics-uptime ${point.value > 0 ? "is-up" : "is-down"}` } });
+      }
+    }
+    chart.createSpan({ cls: "tephramesh-metrics-legend is-api", text: "Green: API reachable" });
+    chart.createSpan({ cls: "tephramesh-metrics-legend is-peer", text: "Red: API unavailable" });
   }
 
   private renderGraph(container: HTMLElement): void {
@@ -1027,6 +1116,26 @@ export class TephrameshSettingTab extends PluginSettingTab {
       text: `Enrolled as ${status.localInstallationName ?? "this installation"}`,
       cls: "tephramesh-enrolled-status",
     });
+    if (this.plugin.canRotateSigningRoot()) {
+      new Setting(container)
+        .setName("Enrollment root")
+        .setDesc("Rotate the configuration-signing root. The current root remains valid for historical verification while every installation migrates after verifying the signed transition.")
+        .addButton((button) => button
+          .setButtonText("Rotate root")
+          .setWarning()
+          .onClick(async () => {
+            if (!window.confirm("Rotate the configuration-signing root now? Every installation must receive and verify the next signed configuration before it can sign again.")) return;
+            button.setDisabled(true).setButtonText("Rotating…");
+            try {
+              await this.plugin.rotateSigningRoot();
+              this.render();
+              showTephrameshNotice("success", "Enrollment root rotated", "The signed transition is now part of the configuration. Other installations will migrate when they accept it.");
+            } catch (error) {
+              showTephrameshNotice("error", "Root rotation failed", error instanceof Error ? error.message : String(error));
+              button.setDisabled(false).setButtonText("Rotate root");
+            }
+          }));
+    }
     const acceptanceSetting = new Setting(container)
       .setName("")
       .setDesc(`Signed configuration revision ${status.revision}.`)

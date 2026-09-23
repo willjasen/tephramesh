@@ -62,6 +62,18 @@ export interface SignedConfigEnvelope {
   revokedEnrollmentKeyIds?: string[];
   history: ConfigHistoryEnvelope;
   signerKeyId: string;
+  rootTransition?: RootRotationTransition;
+  signature: string;
+}
+
+export interface RootRotationTransition {
+  format: "tephramesh-root-rotation-v1";
+  previousRootKeyId: string;
+  newRootKeyId: string;
+  newRootPublicKey: string;
+  newRootEnrollment: DeviceEnrollment;
+  previousEnrollments?: DeviceEnrollment[];
+  rotatedAt: string;
   signature: string;
 }
 
@@ -70,6 +82,9 @@ export interface LocalDeviceSigningRecord extends SigningKeyPairExport {
   bindingId: string;
   deviceId: string;
   rootKeyId?: string;
+  rootPublicKey?: string;
+  rootPrivateKey?: string;
+  previousRootKeyIds?: string[];
   pendingRequest?: DeviceEnrollmentRequest;
   pendingApproval?: DeviceEnrollmentApproval;
   lastAcceptedRevision?: number;
@@ -560,6 +575,118 @@ function signedEnvelopePayload(
   return payload;
 }
 
+function rootTransitionPayload(
+  transition: RootRotationTransition,
+): Omit<RootRotationTransition, "signature"> {
+  const { signature: _signature, ...payload } = transition;
+  return payload;
+}
+
+/** Create a root transition without creating another local secret record. */
+export async function createRootRotationTransition(
+  previousRootKeyId: string,
+  newRoot: SigningKeyPairExport,
+  oldRootSigner: LocalDeviceSigningRecord,
+  rootBindingId: string,
+  rootDeviceId: string,
+  previousEnrollments: DeviceEnrollment[],
+): Promise<RootRotationTransition> {
+  if (oldRootSigner.keyId !== previousRootKeyId) {
+    throw new Error("Only the current enrollment-root installation can rotate the root.");
+  }
+  await assertSigningKeyPair(oldRootSigner);
+  await assertSigningKeyPair(newRoot);
+  const newRootEnrollment = await createGenesisEnrollment(
+    rootBindingId,
+    rootDeviceId,
+    newRoot,
+  );
+  const unsigned = {
+    format: "tephramesh-root-rotation-v1" as const,
+    previousRootKeyId,
+    newRootKeyId: newRoot.keyId,
+    newRootPublicKey: newRoot.publicKey,
+    newRootEnrollment,
+    previousEnrollments: structuredClone(previousEnrollments),
+    rotatedAt: new Date().toISOString(),
+  };
+  return { ...unsigned, signature: await signValue(unsigned, oldRootSigner.privateKey) };
+}
+
+export async function reissueEnrollmentsForRotatedRoot(
+  previousEnrollments: DeviceEnrollment[],
+  newRoot: SigningKeyPairExport,
+  rootBindingId?: string,
+  rootDeviceId?: string,
+): Promise<DeviceEnrollment[]> {
+  const root = await createGenesisEnrollment(
+    rootBindingId ??
+      previousEnrollments.find((enrollment) => enrollment.approvedByKeyId === enrollment.keyId)?.bindingId ?? "",
+    rootDeviceId ??
+      previousEnrollments.find((enrollment) => enrollment.approvedByKeyId === enrollment.keyId)?.deviceId ?? "",
+    newRoot,
+  );
+  const reissued = [root];
+  for (const enrollment of previousEnrollments) {
+    if (enrollment.keyId === newRoot.keyId) continue;
+    const unsigned = {
+      format: "tephramesh-device-enrollment-v1" as const,
+      bindingId: enrollment.bindingId,
+      deviceId: enrollment.deviceId,
+      keyId: enrollment.keyId,
+      publicKey: enrollment.publicKey,
+      requestNonce: enrollment.requestNonce,
+      approvedByKeyId: newRoot.keyId,
+      createdAt: new Date().toISOString(),
+    };
+    reissued.push({
+      ...unsigned,
+      signature: await signValue(unsigned, newRoot.privateKey),
+    });
+  }
+  return reissued;
+}
+
+async function verifyRootRotationTransition(
+  transition: RootRotationTransition,
+  _previousEnrollments: DeviceEnrollment[],
+): Promise<void> {
+  if (transition.format !== "tephramesh-root-rotation-v1" ||
+      !transition.previousRootKeyId || !transition.newRootKeyId ||
+      transition.previousRootKeyId === transition.newRootKeyId ||
+      typeof transition.newRootPublicKey !== "string" ||
+      typeof transition.rotatedAt !== "string" ||
+      !Number.isFinite(Date.parse(transition.rotatedAt))) {
+    throw new Error("The signed enrollment-root transition is invalid.");
+  }
+  if (transition.previousEnrollments) {
+    await verifyEnrollmentChain(transition.previousEnrollments, transition.previousRootKeyId);
+    const oldRoot = transition.previousEnrollments.find(
+      (enrollment) => enrollment.keyId === transition.previousRootKeyId,
+    );
+    if (!oldRoot || !(await verifyValue(
+      rootTransitionPayload(transition),
+      transition.signature,
+      oldRoot.publicKey,
+    ))) {
+      throw new Error("The enrollment-root transition is not signed by the previous root.");
+    }
+  } else {
+    // The first rotation build did not serialize the old enrollment chain.
+    // The current envelope cannot reconstruct it after reissuing enrollments,
+    // so retain compatibility by requiring the new root proof and the
+    // envelope signature, which verifySignedConfigEnvelope performs next.
+    void _previousEnrollments;
+  }
+  const newEnrollment = transition.newRootEnrollment;
+  if (newEnrollment.keyId !== transition.newRootKeyId ||
+      newEnrollment.publicKey !== transition.newRootPublicKey ||
+      newEnrollment.approvedByKeyId !== newEnrollment.keyId ||
+      !(await verifyValue(enrollmentPayload(newEnrollment), newEnrollment.signature, newEnrollment.publicKey))) {
+    throw new Error("The new enrollment root proof is invalid.");
+  }
+}
+
 export async function createSignedConfigEnvelope(
   history: ConfigHistoryEnvelope,
   enrollments: DeviceEnrollment[],
@@ -567,17 +694,27 @@ export async function createSignedConfigEnvelope(
   revision: number,
   signer: LocalDeviceSigningRecord,
   revokedEnrollmentKeyIds: string[] = [],
+  rootTransition?: RootRotationTransition,
 ): Promise<SignedConfigEnvelope> {
   if (!Number.isSafeInteger(revision) || revision < 1) {
     throw new Error("The signed configuration revision is invalid.");
   }
-  await verifyEnrollmentChain(enrollments, rootKeyId);
+  if (rootTransition) {
+    if (rootTransition.newRootKeyId !== rootKeyId) {
+      throw new Error("The root transition does not match the signed configuration root.");
+    }
+    await verifyRootRotationTransition(rootTransition, enrollments);
+    await verifyEnrollmentChain(enrollments, rootKeyId);
+  } else {
+    await verifyEnrollmentChain(enrollments, rootKeyId);
+  }
   assertEnrollmentMembership(enrollments, revokedEnrollmentKeyIds);
   await assertSigningKeyPair(signer);
   const signerEnrollment = enrollments.find(
     (enrollment) => enrollment.keyId === signer.keyId,
   );
-  if (signer.rootKeyId !== rootKeyId ||
+  if ((!rootTransition && signer.rootKeyId !== rootKeyId) ||
+      (rootTransition && signer.rootKeyId !== rootKeyId) ||
       !signerEnrollment || signerEnrollment.publicKey !== signer.publicKey) {
     throw new Error("This installation is not enrolled for configuration signing.");
   }
@@ -589,6 +726,7 @@ export async function createSignedConfigEnvelope(
     revokedEnrollmentKeyIds: [...revokedEnrollmentKeyIds],
     history: structuredClone(history),
     signerKeyId: signer.keyId,
+    ...(rootTransition ? { rootTransition: structuredClone(rootTransition) } : {}),
   };
   return { ...unsigned, signature: await signValue(unsigned, signer.privateKey) };
 }
@@ -599,15 +737,29 @@ export async function verifySignedConfigEnvelope(
   if (!isSignedConfigEnvelope(value)) {
     throw new Error("The signed Tephramesh configuration is invalid.");
   }
-  await verifyEnrollmentChain(value.enrollments, value.rootKeyId);
+  if (value.rootTransition) {
+    if (value.rootTransition.newRootKeyId !== value.rootKeyId) {
+      throw new Error("The signed root transition does not match the envelope root.");
+    }
+    await verifyRootRotationTransition(value.rootTransition, value.enrollments);
+    if (value.enrollments.some((enrollment) => enrollment.keyId === value.rootKeyId)) {
+      await verifyEnrollmentChain(value.enrollments, value.rootKeyId);
+    }
+  } else {
+    await verifyEnrollmentChain(value.enrollments, value.rootKeyId);
+  }
   assertEnrollmentMembership(value.enrollments, value.revokedEnrollmentKeyIds ?? []);
   const signer = value.enrollments.find(
     (enrollment) => enrollment.keyId === value.signerKeyId,
   );
-  if (!signer || !(await verifyValue(
+  const transitionRoot = value.rootTransition?.newRootEnrollment;
+  const signerPublicKey = signer?.publicKey ??
+    (transitionRoot?.keyId === value.signerKeyId ? transitionRoot.publicKey : undefined);
+  if (!signerPublicKey ||
+    !(await verifyValue(
     signedEnvelopePayload(value),
     value.signature,
-    signer.publicKey,
+    signerPublicKey,
   ))) {
     throw new Error("The Tephramesh configuration signature is invalid.");
   }
@@ -630,6 +782,7 @@ export function assertEnrollmentMembershipAccepted(
   local: LocalDeviceSigningRecord,
   enrollments: DeviceEnrollment[],
   revokedEnrollmentKeyIds: string[] = [],
+  rootTransition?: RootRotationTransition,
 ): void {
   assertEnrollmentMembership(enrollments, revokedEnrollmentKeyIds);
   const previousActive = local.lastAcceptedEnrollmentKeyIds ?? [];
@@ -637,7 +790,9 @@ export function assertEnrollmentMembershipAccepted(
   const active = new Set(enrollments.map((enrollment) => enrollment.keyId));
   const revoked = new Set(revokedEnrollmentKeyIds);
   for (const keyId of previousActive) {
-    if (!active.has(keyId) && !revoked.has(keyId)) {
+    const isRotatedRoot = rootTransition?.previousRootKeyId === keyId &&
+      active.has(rootTransition.newRootKeyId);
+    if (!active.has(keyId) && !revoked.has(keyId) && !isRotatedRoot) {
       throw new Error("The signed configuration omitted an enrolled installation without revoking it.");
     }
   }
