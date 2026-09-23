@@ -2,7 +2,8 @@ import { MarkdownView, type TFile, type WorkspaceLeaf } from "obsidian";
 
 export interface EncryptedFileViewHost {
   decryptEncryptedFile(file: TFile): Promise<string>;
-  saveEncryptedFile(file: TFile, plaintext: string): Promise<void>;
+  encryptEncryptedFile(file: TFile, plaintext: string): Promise<string>;
+  signEncryptedFile(file: TFile): Promise<void>;
 }
 
 export class EncryptedFileView extends MarkdownView {
@@ -12,6 +13,8 @@ export class EncryptedFileView extends MarkdownView {
   private loading = false;
   private dirty = false;
   private viewDataVersion = 0;
+  private saving = false;
+  private pendingCiphertext?: string;
 
   constructor(leaf: WorkspaceLeaf, host: EncryptedFileViewHost) {
     super(leaf);
@@ -55,11 +58,17 @@ export class EncryptedFileView extends MarkdownView {
   }
 
   getViewData(): string {
+    if (this.saving && this.pendingCiphertext !== undefined) return this.pendingCiphertext;
     return super.getViewData();
   }
 
   setViewData(data: string, clear: boolean): void {
     if (this.loading) return;
+    if (this.saving) {
+      // MarkdownView reports our ciphertext write back as a file update. Keep
+      // the decrypted editor contents while that save is in progress.
+      return;
+    }
     if (data.startsWith("age-encryption.org/v1")) {
       const file = this.file;
       if (!file) return;
@@ -82,8 +91,15 @@ export class EncryptedFileView extends MarkdownView {
   async save(clear = false): Promise<void> {
     if (!this.file) return;
     if (!this.dirty) return;
-    await this.host.saveEncryptedFile(this.file, super.getViewData());
-    this.dirty = false;
-    if (clear) super.clear();
+    this.pendingCiphertext = await this.host.encryptEncryptedFile(this.file, super.getViewData());
+    this.saving = true;
+    try {
+      await super.save(clear);
+      await this.host.signEncryptedFile(this.file);
+      this.dirty = false;
+    } finally {
+      this.saving = false;
+      this.pendingCiphertext = undefined;
+    }
   }
 }

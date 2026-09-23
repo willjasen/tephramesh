@@ -853,7 +853,7 @@ export default class TephrameshPlugin extends Plugin {
     return new TextDecoder().decode(plaintext);
   }
 
-  async saveEncryptedFile(file: TFile, plaintext: string): Promise<void> {
+  async encryptEncryptedFile(file: TFile, plaintext: string): Promise<string> {
     if (!this.canEncryptVaultContent()) {
       throw new Error("Unlock Tephramesh and enroll this installation before encrypting vault files.");
     }
@@ -861,7 +861,10 @@ export default class TephrameshPlugin extends Plugin {
       this.settings.ageRecipient,
       new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
     );
-    await this.app.vault.modifyBinary(file, ciphertext);
+    return new TextDecoder().decode(ciphertext);
+  }
+
+  async signEncryptedFile(file: TFile): Promise<void> {
     await this.writeContentSignature(file);
   }
 
